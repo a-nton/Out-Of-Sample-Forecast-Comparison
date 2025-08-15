@@ -63,7 +63,7 @@ from models import (
     estimate_capm, estimate_ff3, forecast_capm_return, forecast_ff3_return,
     calculate_vw_beta, analyze_alpha_persistence, diagnose_estimation_quality
 )
-from sampling import sample_events, analyze_sample_characteristics, validate_sampling_randomness
+from sampling import sample_events_value_weighted, analyze_sample_characteristics, validate_sampling_randomness
 from evaluation import (
     calculate_forecast_errors, calculate_rmse, calculate_mae, paired_t_test,
     diebold_mariano_test, bootstrap_rmse, analyze_by_characteristic,
@@ -149,8 +149,8 @@ def main():
     print("SECTION 3: SAMPLING AND MODEL ESTIMATION")
     print("="*70)
     
-    # Sample events for all horizons
-    all_samples = sample_events(
+    # Sample events for all horizons using value-weighted selection
+    all_samples = sample_events_value_weighted(
         merged_df,
         n_samples=SAMPLING_CONFIG['n_samples'],
         estimation_window=SAMPLING_CONFIG['estimation_window'],
@@ -159,13 +159,22 @@ def main():
         random_seed=SAMPLING_CONFIG['random_seed'],
         verbose=OUTPUT_CONFIG['verbose']
     )
-    
+
+    # Verify value-weighted sampling
+    sample_permnos = [s['permno'] for s in all_samples[1]]
+    sample_caps = [s['mean_market_cap'] for s in all_samples[1]]
+    print(f"\nSampling Diagnostics:")
+    if sample_caps:
+        print(f"Mean market cap in sample: ${np.mean(sample_caps):,.0f}M")
+        print(f"Median market cap in sample: ${np.median(sample_caps):,.0f}M")
+        print(f"Min market cap in sample: ${np.min(sample_caps):,.0f}M")
+
     # Analyze sample characteristics
     sample_chars = analyze_sample_characteristics(all_samples)
     print("\nSample Characteristics:")
     print(sample_chars)
     sample_chars.to_csv(os.path.join(OUTPUT_CONFIG['results_dir'], 'sample_characteristics.csv'), index=False)
-    
+
     # Validate randomness
     if len(all_samples[SAMPLING_CONFIG['forecast_horizons'][0]]) >= 50:
         randomness_check = validate_sampling_randomness(all_samples)
@@ -282,7 +291,12 @@ def main():
         
         if estimation_issues:
             print(f"  Found {len(estimation_issues)} estimations with severe issues")
-    
+
+    # Check beta distribution for 1-day horizon
+    if len(results_by_horizon.get(1, [])) > 0:
+        mean_beta = results_by_horizon[1]['beta'].mean()
+        print(f"Mean beta in sample: {mean_beta:.3f} (should be close to 1.0)")
+
     # === SECTION 5: EVALUATION AND TESTING ===
     print("\n" + "="*70)
     print("SECTION 5: STATISTICAL EVALUATION")

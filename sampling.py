@@ -370,7 +370,141 @@ def sample_events(merged_data: pd.DataFrame,
         
         print(f"\nStocks used: {summary['n_stocks_used']}")
         print(f"Average samples per stock: {summary['avg_windows_per_stock']:.2f}")
-    
+
+    return samples
+
+
+def sample_events_value_weighted(merged_data: pd.DataFrame,
+                                n_samples: int,
+                                estimation_window: int,
+                                forecast_horizons: List[int],
+                                config: dict,
+                                random_seed: Optional[int] = None,
+                                verbose: bool = True) -> Dict[int, List[dict]]:
+    """Sample events using market-cap weights."""
+
+    if random_seed is not None:
+        random.seed(random_seed)
+        np.random.seed(random_seed)
+
+    # Calculate average market cap and derive sampling weights
+    avg_market_caps = merged_data.groupby('PERMNO')['market_cap'].mean()
+    min_cap = config.get('min_market_cap', 0)
+    if min_cap > 0:
+        valid_stocks = avg_market_caps[avg_market_caps >= min_cap]
+        if verbose:
+            print(f"Filtered to {len(valid_stocks)} stocks with market cap >= ${min_cap}M")
+    else:
+        valid_stocks = avg_market_caps
+
+    weights = valid_stocks / valid_stocks.sum()
+    valid_permnos = weights.index.tolist()
+    sampling_weights = weights.values
+
+    if verbose:
+        top10 = weights.nlargest(min(10, len(weights))).sum()
+        top50 = weights.nlargest(min(50, len(weights))).sum()
+        print(f"\nValue-weighted sampling from {len(valid_permnos)} stocks")
+        print(f"Top 10 stocks weight: {top10:.1%}")
+        print(f"Top 50 stocks weight: {top50:.1%}")
+
+    window_tracker = WindowTracker()
+    samples = {h: [] for h in forecast_horizons}
+    attempts = 0
+    max_attempts = n_samples * config.get('max_attempts_multiplier', 100)
+    all_trading_dates = merged_data['date'].unique()
+
+    while len(samples[forecast_horizons[0]]) < n_samples and attempts < max_attempts:
+        attempts += 1
+
+        # Weighted selection by market cap
+        permno = np.random.choice(valid_permnos, p=sampling_weights)
+        stock_data = merged_data[merged_data['PERMNO'] == permno].sort_values('date').reset_index(drop=True)
+
+        valid_indices = get_valid_estimation_indices(stock_data, estimation_window, forecast_horizons)
+        if len(valid_indices) == 0:
+            window_tracker.record_rejection("no_valid_indices")
+            continue
+
+        # Random date selection
+        est_end_idx = random.choice(valid_indices)
+        est_start_idx = est_end_idx - estimation_window + 1
+        est_data = stock_data.iloc[est_start_idx:est_end_idx + 1].copy()
+
+        is_valid, rejection_reason = validate_estimation_window(est_data, config)
+        if not is_valid:
+            window_tracker.record_rejection(rejection_reason)
+            continue
+
+        valid_for_all_horizons = True
+        forecast_data_by_horizon = {}
+        for horizon in forecast_horizons:
+            forecast_idx = est_end_idx + horizon
+            if forecast_idx >= len(stock_data):
+                valid_for_all_horizons = False
+                window_tracker.record_rejection(f"no_data_h{horizon}")
+                break
+            forecast_data = stock_data.iloc[forecast_idx]
+            if pd.isna(forecast_data['RET']) or pd.isna(forecast_data['Mkt-RF']):
+                valid_for_all_horizons = False
+                window_tracker.record_rejection(f"missing_forecast_h{horizon}")
+                break
+            forecast_data_by_horizon[horizon] = forecast_data
+
+        if not valid_for_all_horizons:
+            continue
+
+        base_forecast_date = stock_data.iloc[est_end_idx + 1]['date']
+        has_overlap, overlap_reason = window_tracker.check_overlap(
+            permno, est_data.iloc[0]['date'], est_data.iloc[-1]['date'], base_forecast_date
+        )
+        if has_overlap:
+            window_tracker.record_rejection(overlap_reason)
+            continue
+
+        base_sample = {
+            'permno': permno,
+            'estimation_start': est_data.iloc[0]['date'],
+            'estimation_end': est_data.iloc[-1]['date'],
+            'estimation_data': est_data,
+            'n_obs': len(est_data),
+            'n_returns': est_data['RET'].notna().sum(),
+            'mean_market_cap': est_data['market_cap'].mean() if 'market_cap' in est_data.columns else None,
+        }
+
+        for horizon in forecast_horizons:
+            sample = base_sample.copy()
+            sample['horizon'] = horizon
+            sample['forecast_date'] = forecast_data_by_horizon[horizon]['date']
+            sample['forecast_data'] = forecast_data_by_horizon[horizon]
+            sample['calendar_days'] = (sample['forecast_date'] - sample['estimation_end']).days
+            sample['trading_days'] = calculate_actual_trading_days(
+                sample['estimation_end'] + timedelta(days=1),
+                sample['forecast_date'],
+                all_trading_dates,
+            )
+            samples[horizon].append(sample)
+
+        window_tracker.add_window(permno, est_data.iloc[0]['date'], est_data.iloc[-1]['date'], base_forecast_date)
+
+        current_progress = len(samples[forecast_horizons[0]])
+        if verbose and current_progress % 10 == 0 and current_progress > 0:
+            print(
+                f"Progress: {current_progress}/{n_samples} samples collected "
+                f"({attempts} attempts, {attempts/current_progress:.1f} attempts per sample)"
+            )
+
+    if verbose:
+        print(f"\nSampling complete: {len(samples[forecast_horizons[0]])} samples collected in {attempts} attempts")
+        summary = window_tracker.get_summary()
+        if summary['rejection_reasons']:
+            print("\nRejection reasons:")
+            total_rejections = summary['total_rejections']
+            for reason, count in sorted(summary['rejection_reasons'].items(), key=lambda x: x[1], reverse=True):
+                print(f"  {reason:30} {count:6d} ({count/total_rejections*100:5.1f}%)")
+        print(f"\nStocks used: {summary['n_stocks_used']}")
+        print(f"Average samples per stock: {summary['avg_windows_per_stock']:.2f}")
+
     return samples
 
 
