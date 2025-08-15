@@ -175,7 +175,7 @@ def validate_estimation_window(data: pd.DataFrame, config: dict) -> Tuple[bool, 
     return True, ""
 
 
-def calculate_actual_trading_days(start_date: pd.Timestamp, 
+def calculate_actual_trading_days(start_date: pd.Timestamp,
                                 end_date: pd.Timestamp,
                                 all_dates: pd.Series) -> int:
     """
@@ -191,6 +191,63 @@ def calculate_actual_trading_days(start_date: pd.Timestamp,
     """
     mask = (all_dates >= start_date) & (all_dates <= end_date)
     return mask.sum()
+
+
+def compute_cross_sectional_weights(merged_data: pd.DataFrame,
+                                    min_market_cap: float = 0) -> pd.DataFrame:
+    """Compute market-cap weights for each stock-date pair from the
+    broad market universe.
+
+    Args:
+        merged_data: DataFrame containing at least PERMNO, date and
+            market_cap columns.
+        min_market_cap: Minimum market cap (same units as market_cap) to
+            include in the universe. Defaults to 0 meaning all stocks.
+
+    Returns:
+        DataFrame with columns PERMNO, date and weight where weight is
+        the firm's share of total market cap on that date.
+    """
+
+    weights = merged_data[['PERMNO', 'date', 'market_cap']].dropna().copy()
+
+    if min_market_cap > 0:
+        weights = weights[weights['market_cap'] >= min_market_cap]
+
+    weights['total_cap'] = weights.groupby('date')['market_cap'].transform('sum')
+    weights['weight'] = weights['market_cap'] / weights['total_cap']
+    return weights[['PERMNO', 'date', 'weight']]
+
+
+def validate_weight_distribution(weights: pd.DataFrame,
+                                 verbose: bool = True) -> None:
+    """Validate that cross-sectional weights form a proper market
+    distribution.
+
+    Checks that weights sum to 1 for each date and reports concentration
+    metrics. Raises a warning if any date's weights do not sum to 1.
+
+    Args:
+        weights: DataFrame produced by ``compute_cross_sectional_weights``
+        verbose: If True, print summary statistics.
+    """
+
+    totals = weights.groupby('date')['weight'].sum()
+    mismatched = totals[np.abs(totals - 1) > 1e-6]
+    if not mismatched.empty:
+        warnings.warn(
+            f"Weight sums differ from 1 for {len(mismatched)} dates;"
+            " check market universe coverage."
+        )
+
+    if verbose:
+        by_stock = weights.groupby('PERMNO')['weight'].sum()
+        top10 = by_stock.nlargest(min(10, len(by_stock))).sum()
+        top50 = by_stock.nlargest(min(50, len(by_stock))).sum()
+        print(
+            "\nWeight distribution summary:"
+            f" {len(by_stock)} stocks, top 10 {top10:.1%}, top 50 {top50:.1%}"
+        )
 
 
 # === SECTION 3: MAIN SAMPLING FUNCTION ===
@@ -381,29 +438,29 @@ def sample_events_value_weighted(merged_data: pd.DataFrame,
                                 config: dict,
                                 random_seed: Optional[int] = None,
                                 verbose: bool = True) -> Dict[int, List[dict]]:
-    """Sample events using market-cap weights."""
+    """Sample events using market-cap weights from the full market."""
 
     if random_seed is not None:
         random.seed(random_seed)
         np.random.seed(random_seed)
 
-    # Calculate average market cap and derive sampling weights
-    avg_market_caps = merged_data.groupby('PERMNO')['market_cap'].mean()
+    # --- Compute and validate cross-sectional weights ---
     min_cap = config.get('min_market_cap', 0)
-    if min_cap > 0:
-        valid_stocks = avg_market_caps[avg_market_caps >= min_cap]
-        if verbose:
-            print(f"Filtered to {len(valid_stocks)} stocks with market cap >= ${min_cap}M")
-    else:
-        valid_stocks = avg_market_caps
+    weight_table = compute_cross_sectional_weights(merged_data, min_market_cap=min_cap)
+    validate_weight_distribution(weight_table, verbose=verbose)
 
-    weights = valid_stocks / valid_stocks.sum()
-    valid_permnos = weights.index.tolist()
-    sampling_weights = weights.values
+    # Average weight by stock for sampling
+    stock_weights = weight_table.groupby('PERMNO')['weight'].mean()
+    stock_weights = stock_weights / stock_weights.sum()
+    valid_permnos = stock_weights.index.tolist()
+    sampling_weights = stock_weights.values
+
+    # Pre-compute lookup for individual date weights
+    weight_lookup = weight_table.set_index(['PERMNO', 'date'])['weight'].to_dict()
 
     if verbose:
-        top10 = weights.nlargest(min(10, len(weights))).sum()
-        top50 = weights.nlargest(min(50, len(weights))).sum()
+        top10 = stock_weights.nlargest(min(10, len(stock_weights))).sum()
+        top50 = stock_weights.nlargest(min(50, len(stock_weights))).sum()
         print(f"\nValue-weighted sampling from {len(valid_permnos)} stocks")
         print(f"Top 10 stocks weight: {top10:.1%}")
         print(f"Top 50 stocks weight: {top50:.1%}")
@@ -482,6 +539,9 @@ def sample_events_value_weighted(merged_data: pd.DataFrame,
                 sample['estimation_end'] + timedelta(days=1),
                 sample['forecast_date'],
                 all_trading_dates,
+            )
+            sample['market_weight'] = weight_lookup.get(
+                (permno, sample['forecast_date']), np.nan
             )
             samples[horizon].append(sample)
 
