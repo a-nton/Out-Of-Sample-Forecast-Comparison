@@ -225,17 +225,30 @@ def sample_events(merged_data: pd.DataFrame,
     # Initialize
     window_tracker = WindowTracker()
     samples = {h: [] for h in forecast_horizons}
-    unique_permnos = merged_data['PERMNO'].unique()
     all_trading_dates = merged_data['date'].unique()
-    
-    # Pre-filter stocks with sufficient data
+
+    # --- Pre-group data by PERMNO to avoid repeated slicing ---
+    grouped_data = {}
     valid_permnos = []
     min_required_obs = estimation_window + max(forecast_horizons) + 10
-    
-    for permno in unique_permnos:
-        if len(merged_data[merged_data['PERMNO'] == permno]) >= min_required_obs:
-            valid_permnos.append(permno)
-    
+
+    for permno, stock_df in merged_data.groupby('PERMNO'):
+        stock_df = stock_df.sort_values('date').reset_index(drop=True)
+        if len(stock_df) < min_required_obs:
+            continue
+
+        valid_indices = get_valid_estimation_indices(stock_df,
+                                                    estimation_window,
+                                                    forecast_horizons)
+        if len(valid_indices) == 0:
+            continue
+
+        grouped_data[permno] = {
+            'data': stock_df,
+            'valid_indices': valid_indices
+        }
+        valid_permnos.append(permno)
+
     if verbose:
         print(f"\nSampling from {len(valid_permnos)} stocks with sufficient data")
         print(f"Target: {n_samples} samples for {len(forecast_horizons)} horizons")
@@ -246,17 +259,17 @@ def sample_events(merged_data: pd.DataFrame,
     
     while len(samples[forecast_horizons[0]]) < n_samples and attempts < max_attempts:
         attempts += 1
-        
+
         # Random stock selection
         permno = random.choice(valid_permnos)
-        stock_data = merged_data[merged_data['PERMNO'] == permno].sort_values('date').reset_index(drop=True)
-        
-        # Get valid indices for estimation end
-        valid_indices = get_valid_estimation_indices(stock_data, estimation_window, forecast_horizons)
+        stock_info = grouped_data[permno]
+        stock_data = stock_info['data']
+        valid_indices = stock_info['valid_indices']
+
         if len(valid_indices) == 0:
             window_tracker.record_rejection("no_valid_indices")
             continue
-        
+
         # Random date selection
         est_end_idx = random.choice(valid_indices)
         est_start_idx = est_end_idx - estimation_window + 1
