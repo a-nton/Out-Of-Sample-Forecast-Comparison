@@ -8,7 +8,12 @@ import os
 import importlib
 import subprocess
 import warnings
+from pathlib import Path
 warnings.filterwarnings('ignore')
+
+# Resolve project base directory to the location of this file
+BASE_DIR = Path(__file__).resolve().parent
+os.chdir(BASE_DIR)
 
 # Ensure required third-party packages are available
 REQUIRED_PACKAGES = [
@@ -45,7 +50,7 @@ from datetime import datetime
 import time
 
 # Add src to path if using modular structure
-sys.path.append('src')
+sys.path.append(str(BASE_DIR / 'src'))
 
 # Import all modules
 from config import *
