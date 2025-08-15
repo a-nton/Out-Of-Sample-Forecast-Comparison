@@ -258,7 +258,7 @@ def main():
                     'error_alpha': error_alpha,
                     'error_zero': error_zero,
                     'market_cap': sample.get('mean_market_cap', np.nan),
-                    **stats  # Include model statistics
+                    **metrics  # Include model metrics
                 }
                 
                 results.append(result)
