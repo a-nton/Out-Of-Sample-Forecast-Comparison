@@ -184,17 +184,30 @@ def plot_horizon_analysis(all_results: Dict[int, dict],
     
     # Bottom: Improvement
     bars = ax2.bar(horizons, improvements, color='darkgreen', alpha=0.7)
-    
-    # Add significance stars
+    ax2.margins(y=0.2)  # add headroom for annotations
+
+    # Add significance stars with offsets to keep them inside the plot
     for i, h in enumerate(horizons):
         if 'p_value' in all_results[h]:
             p_val = all_results[h]['p_value']
+            stars = ''
             if p_val < 0.01:
-                ax2.text(h, improvements[i] + 0.5, '***', ha='center')
+                stars = '***'
             elif p_val < 0.05:
-                ax2.text(h, improvements[i] + 0.5, '**', ha='center')
+                stars = '**'
             elif p_val < 0.10:
-                ax2.text(h, improvements[i] + 0.5, '*', ha='center')
+                stars = '*'
+            if stars:
+                offset = 5 if improvements[i] >= 0 else -5
+                va = 'bottom' if improvements[i] >= 0 else 'top'
+                ax2.annotate(
+                    stars,
+                    xy=(h, improvements[i]),
+                    xytext=(0, offset),
+                    textcoords='offset points',
+                    ha='center',
+                    va=va
+                )
     
     ax2.axhline(0, color='black', linestyle='-', alpha=0.5)
     ax2.set_xlabel('Forecast Horizon (days)')
