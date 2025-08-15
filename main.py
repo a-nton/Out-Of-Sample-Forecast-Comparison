@@ -115,7 +115,7 @@ def main():
     
     # Load data
     crsp_df = load_crsp_data()
-    # For CAPM we still use FF3 file but only Mkt-RF and RF columns
+    # Load Fama-French data for risk-free rate (and other factors if needed)
     ff_df = load_ff_factors()
     
     # Merge and prepare
@@ -213,8 +213,8 @@ def main():
                     
                     # Generate forecasts
                     forecast_row = sample['forecast_data']
-                    mkt_excess = forecast_row['Mkt-RF']
                     rf = forecast_row['RF']
+                    mkt_excess = forecast_row['MKT'] - rf
                     
                     forecast_alpha = forecast_capm_return(alpha, beta, mkt_excess, rf, use_alpha=True)
                     forecast_zero = forecast_capm_return(alpha, beta, mkt_excess, rf, use_alpha=False)

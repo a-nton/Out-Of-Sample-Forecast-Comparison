@@ -45,7 +45,7 @@ def validate_columns(data: pd.DataFrame, required_cols: List[str],
         col_types[col] = str(data[col].dtype)
         
         # Check if numeric where expected
-        numeric_cols = ['RET', 'RF', 'Mkt-RF', 'SMB', 'HML', 'RMW', 'CMA', 'market_cap']
+        numeric_cols = ['RET', 'RF', 'MKT', 'Mkt-RF', 'SMB', 'HML', 'RMW', 'CMA', 'market_cap']
         if col in numeric_cols:
             if not pd.api.types.is_numeric_dtype(data[col]):
                 warnings.warn(
@@ -99,8 +99,8 @@ def check_estimation_data_quality(data: pd.DataFrame) -> Dict[str, any]:
                 quality['warnings'].append("Many identical returns detected")
     
     # Check market data
-    if 'Mkt-RF' in data.columns:
-        mkt_stats = data['Mkt-RF'].dropna()
+    if 'MKT' in data.columns:
+        mkt_stats = data['MKT'].dropna()
         quality['mkt_mean'] = mkt_stats.mean()
         quality['mkt_std'] = mkt_stats.std()
         
@@ -230,9 +230,9 @@ def estimate_capm(data: pd.DataFrame,
     """
     Estimate CAPM model with comprehensive validation.
     R_i - R_f = alpha + beta * (R_m - R_f) + epsilon
-    
+
     Args:
-        data: DataFrame with columns RET, RF, Mkt-RF
+        data: DataFrame with columns RET, RF, MKT (market return)
         min_obs: Minimum observations required
         validate_data: Whether to validate (None = use config setting)
     
@@ -246,15 +246,17 @@ def estimate_capm(data: pd.DataFrame,
     
     # Validate columns if requested
     if validate_data:
-        required_cols = ['RET', 'RF', 'Mkt-RF']
+        required_cols = ['RET', 'RF', 'MKT']
         col_types = validate_columns(
             data, required_cols, "CAPM", verbose=OUTPUT_CONFIG.get('verbose', False)
         )
         data_quality = check_estimation_data_quality(data)
     
     # Prepare data - ensure we have numeric arrays
-    y = pd.to_numeric(data['RET'] - data['RF'], errors='coerce').values
-    X = pd.to_numeric(data['Mkt-RF'], errors='coerce').values.reshape(-1, 1)
+    excess_ret = pd.to_numeric(data['RET'] - data['RF'], errors='coerce')
+    mkt_excess = pd.to_numeric(data['MKT'] - data['RF'], errors='coerce')
+    y = excess_ret.values
+    X = mkt_excess.values.reshape(-1, 1)
     
     # Remove missing values
     mask = ~(np.isnan(y) | np.isnan(X.flatten()))
