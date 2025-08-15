@@ -453,7 +453,7 @@ def main():
     
     # Create and save summary table
     summary_table = create_forecast_comparison_table(
-        horizon_results,
+        results_by_horizon,
         format_type=OUTPUT_CONFIG['table_format']
     )
     

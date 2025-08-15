@@ -164,8 +164,11 @@ def load_ff_factors(filepath: str = None, factor_model: str = 'ff3') -> pd.DataF
         df[col] = pd.to_numeric(df[col], errors='coerce')
 
     # Check if factors are in percentage or decimal format
+    # Using a 1% threshold captures daily Fama-French data typically
+    # provided in percentage units while avoiding unnecessary
+    # conversion when data are already in decimal format.
     mkt_mean = df['Mkt-RF'].dropna().mean()
-    if abs(mkt_mean) > 0.1:  # Likely in percentage format
+    if abs(mkt_mean) > 0.01:  # Likely in percentage format
         logger.debug("Factors appear to be in percentage format (mean market = %.3f)", mkt_mean)
         logger.debug("Converting to decimal format to match CRSP returns")
         for col in factor_cols:
