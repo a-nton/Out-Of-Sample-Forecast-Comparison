@@ -112,8 +112,10 @@ def paired_t_test(errors1: np.ndarray, errors2: np.ndarray,
     # Note: scipy's ttest_rel tests if the mean of differences is zero
     # This is equivalent to testing if means are equal
     result = stats.ttest_rel(errors1, errors2, alternative=alternative, nan_policy='omit')
-    
-    return result.statistic, result.pvalue
+    t_stat, p_val = result.statistic, result.pvalue
+    # Interpretation: t_stat > 0 means errors1 > errors2 on average
+    # Small p_val (e.g. <0.05) rejects equal means; large p_val implies no significant difference
+    return t_stat, p_val
 
 
 def diebold_mariano_test(errors1: np.ndarray, errors2: np.ndarray, 
@@ -217,7 +219,8 @@ def diebold_mariano_test(errors1: np.ndarray, errors2: np.ndarray,
             details['conclusion'] = 'No significant difference in predictive accuracy'
     else:
         details['interpretation'] = 'Sample size may be too small for reliable DM test'
-    
+    # Interpretation: dm_stat > 0 implies model 1 has higher loss than model 2
+    # Small p_value (e.g. <0.05) indicates predictive accuracy differs; large p_value suggests no difference
     return dm_stat, p_value, details
 
 
@@ -242,8 +245,9 @@ def sign_test(errors1: np.ndarray, errors2: np.ndarray) -> Tuple[float, float]:
         return np.nan, np.nan
     
     # Binomial test with p=0.5
-    p_value = stats.binom_test(wins, n_comparisons, p=0.5, alternative='two-sided')
-    
+    p_value = stats.binomtest(wins, n_comparisons, p=0.5, alternative='two-sided').pvalue
+    # Return win rate for model 1 and associated p_value
+    # Low p_value (<0.05) -> model 1's win rate differs from 50%; high p_value -> no clear advantage
     return wins / n_comparisons, p_value
 
 
@@ -259,15 +263,13 @@ def bootstrap_rmse(errors: np.ndarray, n_bootstrap: int = 1000,
         lower_ci: Lower confidence bound
         upper_ci: Upper confidence bound
     """
-    if random_seed is not None:
-        np.random.seed(random_seed)
-    
+    rng = np.random.default_rng(random_seed)
+
     n = len(errors)
     rmse_bootstrap = []
-    
+
     for _ in range(n_bootstrap):
-        # Resample with replacement
-        sample_idx = np.random.choice(n, n, replace=True)
+        sample_idx = rng.choice(n, n, replace=True)
         sample_errors = errors[sample_idx]
         rmse_bootstrap.append(calculate_rmse(sample_errors))
     
@@ -296,9 +298,8 @@ def bootstrap_comparison(errors1: np.ndarray, errors2: np.ndarray,
     Returns:
         Dictionary with bootstrap results
     """
-    if random_seed is not None:
-        np.random.seed(random_seed)
-    
+    rng = np.random.default_rng(random_seed)
+
     n = len(errors1)
     metric_diffs = []
     
@@ -312,7 +313,7 @@ def bootstrap_comparison(errors1: np.ndarray, errors2: np.ndarray,
     
     for _ in range(n_bootstrap):
         # Resample pairs to maintain correlation
-        idx = np.random.choice(n, n, replace=True)
+        idx = rng.choice(n, n, replace=True)
         
         metric1 = metric_func(errors1[idx])
         metric2 = metric_func(errors2[idx])
@@ -327,7 +328,7 @@ def bootstrap_comparison(errors1: np.ndarray, errors2: np.ndarray,
         'std_diff': np.std(metric_diffs),
         'ci_lower': np.percentile(metric_diffs, 2.5),
         'ci_upper': np.percentile(metric_diffs, 97.5),
-        'p_value': np.mean(metric_diffs > 0) * 2,  # Two-sided test
+        'p_value': np.mean(metric_diffs > 0) * 2,  # Two-sided test; low p_value (<0.05) => metric1 differs from metric2
         'prob_model1_better': np.mean(metric_diffs < 0),
         'significant': False
     }
@@ -369,7 +370,9 @@ def analyze_by_characteristic(results_df: pd.DataFrame,
     # Create groups
     if group_method == 'quintile':
         labels = [f'Q{i+1}' for i in range(n_groups)]
-        clean_df['group'] = pd.qcut(clean_df[characteristic], q=n_groups, labels=labels)
+        clean_df['group'] = pd.qcut(
+            clean_df[characteristic], q=n_groups, labels=labels, duplicates='drop'
+        )
     else:
         labels = [f'G{i+1}' for i in range(n_groups)]
         clean_df['group'] = pd.cut(clean_df[characteristic], bins=n_groups, labels=labels)
@@ -529,7 +532,8 @@ def analyze_alpha_subset(results_df: pd.DataFrame,
 
 
 def bootstrap_comparison_groups(group1_errors: np.ndarray, group2_errors: np.ndarray,
-                              n_bootstrap: int = 1000) -> Dict[str, float]:
+                              n_bootstrap: int = 1000,
+                              random_seed: Optional[int] = None) -> Dict[str, float]:
     """
     Bootstrap comparison of improvement between two groups.
     
@@ -540,19 +544,19 @@ def bootstrap_comparison_groups(group1_errors: np.ndarray, group2_errors: np.nda
     Returns:
         Dictionary with bootstrap comparison results
     """
+    rng = np.random.default_rng(random_seed)
+
     improvements_diff = []
-    
+
     for _ in range(n_bootstrap):
-        # Bootstrap group 1
-        idx1 = np.random.choice(len(group1_errors), len(group1_errors), replace=True)
+        idx1 = rng.choice(len(group1_errors), len(group1_errors), replace=True)
         g1_alpha = group1_errors[idx1, 0]
         g1_zero = group1_errors[idx1, 1]
         g1_rmse_alpha = calculate_rmse(g1_alpha)
         g1_rmse_zero = calculate_rmse(g1_zero)
         g1_improvement = (g1_rmse_zero - g1_rmse_alpha) / g1_rmse_zero * 100 if g1_rmse_zero > 0 else 0
-        
-        # Bootstrap group 2
-        idx2 = np.random.choice(len(group2_errors), len(group2_errors), replace=True)
+
+        idx2 = rng.choice(len(group2_errors), len(group2_errors), replace=True)
         g2_alpha = group2_errors[idx2, 0]
         g2_zero = group2_errors[idx2, 1]
         g2_rmse_alpha = calculate_rmse(g2_alpha)

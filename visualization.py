@@ -34,7 +34,9 @@ def setup_plot_style():
 # === SECTION 2: MAIN COMPARISON PLOT ===
 
 def plot_error_comparison(errors_alpha: np.ndarray, errors_zero: np.ndarray,
-                         save_path: Optional[str] = None) -> plt.Figure:
+                         save_path: Optional[str] = None,
+                         error_range: Optional[tuple] = None,
+                         scatter_range: Optional[tuple] = None) -> plt.Figure:
     """
     Create 4-panel error comparison figure.
     """
@@ -56,6 +58,8 @@ def plot_error_comparison(errors_alpha: np.ndarray, errors_zero: np.ndarray,
     ax1.set_ylabel('Density')
     ax1.set_title('(a) Forecast Error Differential')
     ax1.legend()
+    if error_range is not None:
+        ax1.set_xlim(error_range)
     
     # Panel 2: Paired error scatter
     ax2 = axes[0, 1]
@@ -68,6 +72,9 @@ def plot_error_comparison(errors_alpha: np.ndarray, errors_zero: np.ndarray,
     ax2.set_title('(b) Paired Forecast Errors')
     ax2.legend()
     ax2.set_aspect('equal')
+    if scatter_range is not None:
+        ax2.set_xlim(scatter_range)
+        ax2.set_ylim(scatter_range)
     
     # Panel 3: RMSE comparison
     ax3 = axes[1, 0]
@@ -94,6 +101,8 @@ def plot_error_comparison(errors_alpha: np.ndarray, errors_zero: np.ndarray,
     ax4.set_ylabel('Density')
     ax4.set_title('(d) Error Distributions')
     ax4.legend()
+    if error_range is not None:
+        ax4.set_xlim(error_range)
     
     plt.tight_layout()
     
@@ -106,7 +115,9 @@ def plot_error_comparison(errors_alpha: np.ndarray, errors_zero: np.ndarray,
 # === SECTION 3: PARAMETER DISTRIBUTIONS ===
 
 def plot_parameter_distributions(results_df: pd.DataFrame,
-                               save_path: Optional[str] = None) -> plt.Figure:
+                               save_path: Optional[str] = None,
+                               alpha_range: Optional[tuple] = None,
+                               beta_range: Optional[tuple] = None) -> plt.Figure:
     """
     Plot alpha and beta distributions.
     """
@@ -122,6 +133,8 @@ def plot_parameter_distributions(results_df: pd.DataFrame,
     ax1.set_ylabel('Frequency')
     ax1.set_title('Alpha Distribution')
     ax1.legend()
+    if alpha_range is not None:
+        ax1.set_xlim(alpha_range)
     
     # Beta distribution
     ax2.hist(results_df['beta'], bins=30, edgecolor='black', alpha=0.7)
@@ -132,6 +145,8 @@ def plot_parameter_distributions(results_df: pd.DataFrame,
     ax2.set_ylabel('Frequency')
     ax2.set_title('Beta Distribution')
     ax2.legend()
+    if beta_range is not None:
+        ax2.set_xlim(beta_range)
     
     plt.tight_layout()
     
@@ -144,7 +159,9 @@ def plot_parameter_distributions(results_df: pd.DataFrame,
 # === SECTION 4: HORIZON ANALYSIS ===
 
 def plot_horizon_analysis(all_results: Dict[int, dict],
-                         save_path: Optional[str] = None) -> plt.Figure:
+                         save_path: Optional[str] = None,
+                         rmse_ylim: Optional[tuple] = None,
+                         improve_ylim: Optional[tuple] = None) -> plt.Figure:
     """
     Plot performance across forecast horizons.
     """
@@ -162,6 +179,8 @@ def plot_horizon_analysis(all_results: Dict[int, dict],
     ax1.set_title('Forecast Error by Horizon')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
+    if rmse_ylim is not None:
+        ax1.set_ylim(rmse_ylim)
     
     # Bottom: Improvement
     bars = ax2.bar(horizons, improvements, color='darkgreen', alpha=0.7)
@@ -182,6 +201,8 @@ def plot_horizon_analysis(all_results: Dict[int, dict],
     ax2.set_ylabel('RMSE Improvement (%)')
     ax2.set_title('Improvement from Including Alpha')
     ax2.set_xticks(horizons)
+    if improve_ylim is not None:
+        ax2.set_ylim(improve_ylim)
     
     plt.tight_layout()
     
@@ -194,7 +215,9 @@ def plot_horizon_analysis(all_results: Dict[int, dict],
 # === SECTION 5: CROSS-SECTIONAL ANALYSIS ===
 
 def plot_size_analysis(results_df: pd.DataFrame,
-                      save_path: Optional[str] = None) -> plt.Figure:
+                      save_path: Optional[str] = None,
+                      rmse_ylim: Optional[tuple] = None,
+                      beta_ylim: Optional[tuple] = None) -> plt.Figure:
     """
     Plot performance by market cap quintiles.
     """
@@ -234,6 +257,8 @@ def plot_size_analysis(results_df: pd.DataFrame,
     ax1.set_xticks(x)
     ax1.set_xticklabels(metrics_df['quintile'])
     ax1.legend()
+    if rmse_ylim is not None:
+        ax1.set_ylim(rmse_ylim)
     
     # Beta by size
     ax2.bar(x, metrics_df['mean_beta'], alpha=0.8)
@@ -243,6 +268,8 @@ def plot_size_analysis(results_df: pd.DataFrame,
     ax2.set_title('Beta by Size')
     ax2.set_xticks(x)
     ax2.set_xticklabels(metrics_df['quintile'])
+    if beta_ylim is not None:
+        ax2.set_ylim(beta_ylim)
     
     plt.tight_layout()
     
@@ -298,7 +325,7 @@ def save_all_figures(figures: Dict[str, plt.Figure],
             print(f"Saved: {filepath}")
 
 
-def adjust_figure_for_presentation(fig: plt.Figure, 
+def adjust_figure_for_presentation(fig: plt.Figure,
                                  presentation_mode: bool = True) -> plt.Figure:
     """
     Adjust figure styling for presentation vs paper mode.
@@ -322,5 +349,17 @@ def adjust_figure_for_presentation(fig: plt.Figure,
         for ax in fig.get_axes():
             for line in ax.get_lines():
                 line.set_linewidth(line.get_linewidth() * 1.5)
-    
+
+    return fig
+
+
+def rescale_axes(fig: plt.Figure,
+                 xlim: Optional[tuple] = None,
+                 ylim: Optional[tuple] = None) -> plt.Figure:
+    """Convenience helper to uniformly adjust axes limits."""
+    for ax in fig.get_axes():
+        if xlim is not None:
+            ax.set_xlim(xlim)
+        if ylim is not None:
+            ax.set_ylim(ylim)
     return fig
