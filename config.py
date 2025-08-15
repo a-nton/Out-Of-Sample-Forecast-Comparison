@@ -71,7 +71,6 @@ DATA_PATHS = {
     'data_dir': './data/',
     'crsp_file': 'data/CRSP 1970-2024.parquet',
     'ff_factors': 'data/F-F_Research_Data_Factors_daily.csv',
-    'ff5_factors': 'data/F-F_Research_Data_5_Factors_2x3_daily.csv',  # If using FF5
 }
 
 # === SECTION 7: VALIDATION SETTINGS ===
@@ -91,6 +90,18 @@ PRESENTATION_CONFIG = {
         'rmse': 5,                       # Decimal places for RMSE
         'statistics': 3,                 # Decimal places for t-stats, p-values
         'coefficients': 5,               # Decimal places for alpha, beta
+    },
+
+    # Optional axis limits for plots (None = auto)
+    'axis_limits': {
+        'error_range': None,
+        'scatter_range': None,
+        'alpha_range': None,
+        'beta_range': None,
+        'horizon_rmse_ylim': None,
+        'horizon_improve_ylim': None,
+        'size_rmse_ylim': None,
+        'size_beta_ylim': None,
     },
     
     # Statistical significance stars
@@ -154,11 +165,6 @@ def format_number(value: float, number_type: str = 'statistics') -> str:
 def validate_config():
     """Validate configuration settings."""
     errors = []
-    
-    # Check paths exist
-    if not os.path.exists(DATA_PATHS['data_dir']):
-        errors.append(f"Data directory not found: {DATA_PATHS['data_dir']}")
-    
     # Check logical consistency
     if SAMPLING_CONFIG['min_observations'] > SAMPLING_CONFIG['estimation_window']:
         errors.append("min_observations cannot exceed estimation_window")

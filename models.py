@@ -5,9 +5,10 @@ Includes CAPM and multi-factor model implementations with comprehensive validati
 
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LinearRegression
 from typing import Tuple, Dict, Optional, List
 import warnings
+
+import statsmodels.api as sm
 from scipy import stats
 
 from config import MODEL_CONFIG, PRESENTATION_CONFIG
@@ -46,12 +47,14 @@ def validate_columns(data: pd.DataFrame, required_cols: List[str],
         numeric_cols = ['RET', 'RF', 'Mkt-RF', 'SMB', 'HML', 'RMW', 'CMA', 'market_cap']
         if col in numeric_cols:
             if not pd.api.types.is_numeric_dtype(data[col]):
-                warnings.warn(f"Column '{col}' has type {data[col].dtype} but numeric type expected.")
+                warnings.warn(
+                    f"Column '{col}' has type {data[col].dtype} but numeric type expected."
+                )
                 try:
-                    data[col] = pd.to_numeric(data[col], errors='coerce')
-                    col_types[col] = str(data[col].dtype) + " (converted)"
-                except:
-                    raise TypeError(f"Cannot convert column '{col}' to numeric type")
+                    pd.to_numeric(data[col], errors='coerce')
+                    col_types[col] = str(data[col].dtype) + " (coerce attempted)"
+                except Exception as exc:
+                    raise TypeError(f"Cannot convert column '{col}' to numeric type") from exc
     
     # Print validation summary if verbose
     if MODEL_CONFIG.get('validate_estimations', True):
@@ -144,22 +147,28 @@ def calculate_vw_beta(results_df: pd.DataFrame) -> Dict[str, any]:
     
     # Calculate value-weighted statistics
     total_cap = clean_data['market_cap'].sum()
-    weights = clean_data['market_cap'] / total_cap
-    vw_beta = (clean_data['beta'] * weights).sum()
-    
-    # Value-weighted standard deviation
-    vw_variance = (weights * (clean_data['beta'] - vw_beta)**2).sum()
-    vw_beta_std = np.sqrt(vw_variance)
-    
-    # Size-beta relationship
-    log_cap = np.log(clean_data['market_cap'])
-    size_beta_corr = np.corrcoef(log_cap, clean_data['beta'])[0, 1]
+    if total_cap > 0:
+        weights = clean_data['market_cap'] / total_cap
+        vw_beta = (clean_data['beta'] * weights).sum()
+        vw_variance = (weights * (clean_data['beta'] - vw_beta) ** 2).sum()
+        vw_beta_std = np.sqrt(vw_variance)
+    else:
+        weights = np.zeros(len(clean_data))
+        vw_beta = np.nan
+        vw_beta_std = np.nan
+
+    if clean_data['market_cap'].var() > 0 and clean_data['beta'].var() > 0:
+        log_cap = np.log(clean_data['market_cap'])
+        size_beta_corr = np.corrcoef(log_cap, clean_data['beta'])[0, 1]
+    else:
+        size_beta_corr = np.nan
     
     # Beta by size quintiles
     clean_data['size_quintile'] = pd.qcut(
-        clean_data['market_cap'], 
-        q=5, 
-        labels=['Q1_Small', 'Q2', 'Q3', 'Q4', 'Q5_Large']
+        clean_data['market_cap'],
+        q=5,
+        labels=['Q1_Small', 'Q2', 'Q3', 'Q4', 'Q5_Large'],
+        duplicates='drop'
     )
     
     beta_by_size = clean_data.groupby('size_quintile')['beta'].agg(['mean', 'std', 'count'])
@@ -180,7 +189,10 @@ def calculate_vw_beta(results_df: pd.DataFrame) -> Dict[str, any]:
         'beta_by_size': beta_by_size,
         
         # Market cap distribution
-        'cap_concentration': clean_data.nlargest(10, 'market_cap')['market_cap'].sum() / total_cap,
+        'cap_concentration': (
+            clean_data.nlargest(10, 'market_cap')['market_cap'].sum() / total_cap
+            if total_cap > 0 else np.nan
+        ),
         'median_cap': clean_data['market_cap'].median(),
         'mean_cap': clean_data['market_cap'].mean(),
         
@@ -253,88 +265,60 @@ def estimate_capm(data: pd.DataFrame,
         raise ValueError(f"Insufficient observations: {n_obs} < {min_obs} "
                         f"(dropped {n_missing} missing values)")
     
-    # Estimate model
-    model = LinearRegression(fit_intercept=True)
-    model.fit(X_clean, y_clean)
-    
-    alpha = model.intercept_
-    beta = model.coef_[0]
-    
-    # Calculate comprehensive statistics
-    y_pred = model.predict(X_clean)
-    residuals = y_clean - y_pred
-    
-    # R-squared and adjusted R-squared
+    # Estimate model with HAC standard errors
+    X_with_const = sm.add_constant(X_clean)
+    ols = sm.OLS(y_clean, X_with_const)
+    maxlags = int(np.ceil(n_obs ** (1 / 4)))  # Newey-West rule-of-thumb
+    results = ols.fit(cov_type='HAC', cov_kwds={'maxlags': maxlags, 'use_correction': True})
+
+    alpha, beta = results.params
+    residuals = results.resid
+    r_squared = results.rsquared
+    adj_r_squared = results.rsquared_adj
+
+    se_alpha, se_beta = results.bse
+    t_alpha = results.tvalues[0]
+    t_beta = (beta - 1) / se_beta if se_beta > 0 else np.nan
+    p_alpha = results.pvalues[0]
+    p_beta = 2 * (1 - stats.t.cdf(abs(t_beta), n_obs - 2)) if se_beta > 0 else np.nan
+
     ss_res = np.sum(residuals ** 2)
-    ss_tot = np.sum((y_clean - np.mean(y_clean)) ** 2)
-    r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
-    
-    n = len(y_clean)
-    k = 2  # alpha and beta
-    adj_r_squared = 1 - (1 - r_squared) * (n - 1) / (n - k)
-    
-    # Standard errors (homoskedastic)
-    mse = ss_res / (n - k)
-    
-    # Variance-covariance matrix
-    X_with_intercept = np.column_stack([np.ones(n), X_clean.flatten()])
-    try:
-        var_cov = mse * np.linalg.inv(X_with_intercept.T @ X_with_intercept)
-        se_alpha = np.sqrt(var_cov[0, 0])
-        se_beta = np.sqrt(var_cov[1, 1])
-    except np.linalg.LinAlgError:
-        se_alpha = np.nan
-        se_beta = np.nan
-    
-    # Compile statistics
-    stats = {
-        # Basic stats
+
+    metrics = {
         'r_squared': r_squared,
         'adj_r_squared': adj_r_squared,
         'n_obs': n_obs,
         'n_missing': n_missing,
-        
-        # Standard errors and t-stats
         'se_alpha': se_alpha,
         'se_beta': se_beta,
-        't_alpha': alpha / se_alpha if se_alpha > 0 else np.nan,
-        't_beta': (beta - 1) / se_beta if se_beta > 0 else np.nan,  # Test vs 1
-        'p_alpha': 2 * (1 - stats.t.cdf(abs(alpha / se_alpha), n - k)) if se_alpha > 0 else np.nan,
-        'p_beta': 2 * (1 - stats.t.cdf(abs((beta - 1) / se_beta), n - k)) if se_beta > 0 else np.nan,
-        
-        # Residual diagnostics
-        'residual_std': np.std(residuals, ddof=k),
+        't_alpha': t_alpha,
+        't_beta': t_beta,
+        'p_alpha': p_alpha,
+        'p_beta': p_beta,
+        'residual_std': np.std(residuals, ddof=2),
         'residual_skew': stats.skew(residuals),
         'residual_kurtosis': stats.kurtosis(residuals),
-        
-        # Information criteria
-        'aic': n * np.log(ss_res/n) + 2 * k,
-        'bic': n * np.log(ss_res/n) + k * np.log(n),
-        
-        # Market and return characteristics
+        'aic': results.aic,
+        'bic': results.bic,
         'mean_excess_return': np.mean(y_clean),
         'market_excess_mean': np.mean(X_clean),
         'market_excess_std': np.std(X_clean),
-        
-        # Sharpe ratios
         'realized_sharpe': np.mean(y_clean) / np.std(y_clean) if np.std(y_clean) > 0 else 0,
         'market_sharpe': np.mean(X_clean) / np.std(X_clean) if np.std(X_clean) > 0 else 0,
     }
-    
-    # Add data quality info if validated
+
     if validate_data:
-        stats['data_quality'] = data_quality
+        metrics['data_quality'] = data_quality
         if data_quality['warnings']:
-            stats['quality_warnings'] = data_quality['warnings']
-    
-    # Durbin-Watson test for autocorrelation
-    if n > 10:
-        dw = np.sum(np.diff(residuals)**2) / ss_res
-        stats['durbin_watson'] = dw
+            metrics['quality_warnings'] = data_quality['warnings']
+
+    if n_obs > 10:
+        dw = sm.stats.stattools.durbin_watson(residuals)
+        metrics['durbin_watson'] = dw
         if dw < 1.5 or dw > 2.5:
-            stats['autocorrelation_warning'] = f"Potential autocorrelation (DW = {dw:.2f})"
-    
-    return alpha, beta, stats
+            metrics['autocorrelation_warning'] = f"Potential autocorrelation (DW = {dw:.2f})"
+
+    return alpha, beta, metrics
 
 
 def estimate_ff3(data: pd.DataFrame, 
@@ -370,42 +354,30 @@ def estimate_ff3(data: pd.DataFrame,
     if n_obs < min_obs:
         raise ValueError(f"Insufficient observations: {n_obs} < {min_obs}")
     
-    # Estimate model
-    model = LinearRegression(fit_intercept=True)
-    model.fit(X_clean, y_clean)
-    
-    alpha = model.intercept_
-    betas = model.coef_
-    coefficients = np.array([alpha] + betas.tolist())
-    
-    # Calculate statistics
-    y_pred = model.predict(X_clean)
-    residuals = y_clean - y_pred
-    r_squared = model.score(X_clean, y_clean)
-    
+    # Estimate model with HAC standard errors
+    X_with_const = sm.add_constant(X_clean)
+    ols = sm.OLS(y_clean, X_with_const)
+    maxlags = int(np.ceil(n_obs ** (1 / 4)))
+    results = ols.fit(cov_type='HAC', cov_kwds={'maxlags': maxlags, 'use_correction': True})
+
+    coefficients = results.params
+    residuals = results.resid
+    r_squared = results.rsquared
+
     # Model comparison with CAPM
-    X_capm = X_clean[:, 0].reshape(-1, 1)  # Just market factor
-    model_capm = LinearRegression(fit_intercept=True)
-    model_capm.fit(X_capm, y_clean)
-    r_squared_capm = model_capm.score(X_capm, y_clean)
-    
-    # Standard errors
+    X_capm = X_clean[:, 0].reshape(-1, 1)
+    capm_results = sm.OLS(y_clean, sm.add_constant(X_capm)).fit(
+        cov_type='HAC', cov_kwds={'maxlags': maxlags, 'use_correction': True}
+    )
+    r_squared_capm = capm_results.rsquared
+
+    se_coefficients = results.bse
+    t_statistics = results.tvalues
+    p_values = results.pvalues
+
     n = len(y_clean)
-    k = 4  # alpha + 3 betas
+    k = len(coefficients)
     ss_res = np.sum(residuals ** 2)
-    mse = ss_res / (n - k)
-    
-    # Variance-covariance matrix
-    X_with_intercept = np.column_stack([np.ones(n), X_clean])
-    try:
-        var_cov = mse * np.linalg.inv(X_with_intercept.T @ X_with_intercept)
-        se_coefficients = np.sqrt(np.diag(var_cov))
-        t_statistics = coefficients / se_coefficients
-        p_values = 2 * (1 - stats.t.cdf(np.abs(t_statistics), n - k))
-    except:
-        se_coefficients = np.full(4, np.nan)
-        t_statistics = np.full(4, np.nan)
-        p_values = np.full(4, np.nan)
     
     # Factor correlations and VIF
     factor_corr = np.corrcoef(X_clean.T)
@@ -414,51 +386,39 @@ def estimate_ff3(data: pd.DataFrame,
     vif = {}
     for i, factor in enumerate(factor_cols):
         X_others = np.delete(X_clean, i, axis=1)
-        reg = LinearRegression().fit(X_others, X_clean[:, i])
-        r2 = reg.score(X_others, X_clean[:, i])
+        reg = sm.OLS(X_clean[:, i], sm.add_constant(X_others)).fit()
+        r2 = reg.rsquared
         vif[factor] = 1 / (1 - r2) if r2 < 0.999 else np.inf
     
-    stats = {
-        # Model fit
+    metrics = {
         'r_squared': r_squared,
         'adj_r_squared': 1 - (1 - r_squared) * (n - 1) / (n - k),
         'r_squared_capm': r_squared_capm,
         'incremental_r_squared': r_squared - r_squared_capm,
-        
-        # Sample info
         'n_obs': n_obs,
         'n_missing': len(y) - n_obs,
-        
-        # Coefficients and inference
         'factor_names': ['alpha', 'beta_mkt', 'beta_smb', 'beta_hml'],
         'coefficients': coefficients,
         'se_coefficients': se_coefficients,
         't_statistics': t_statistics,
         'p_values': p_values,
-        
-        # Model diagnostics
         'residual_std': np.std(residuals, ddof=k),
-        'aic': n * np.log(ss_res/n) + 2 * k,
-        'bic': n * np.log(ss_res/n) + k * np.log(n),
-        
-        # Multicollinearity diagnostics
+        'aic': results.aic,
+        'bic': results.bic,
         'factor_correlations': factor_corr,
         'vif': vif,
         'max_vif': max(vif.values()),
-        
-        # Economic significance
         'factor_risk_premia': {
             'mkt': coefficients[1] * np.mean(X_clean[:, 0]),
             'smb': coefficients[2] * np.mean(X_clean[:, 1]),
             'hml': coefficients[3] * np.mean(X_clean[:, 2]),
-        }
+        },
     }
-    
-    # Warning for multicollinearity
-    if stats['max_vif'] > 10:
-        stats['multicollinearity_warning'] = f"High VIF detected: {stats['max_vif']:.1f}"
-    
-    return coefficients, stats
+
+    if metrics['max_vif'] > 10:
+        metrics['multicollinearity_warning'] = f"High VIF detected: {metrics['max_vif']:.1f}"
+
+    return coefficients, metrics
 
 
 # === SECTION 4: FORECAST GENERATION ===
@@ -501,11 +461,30 @@ def forecast_ff3_return(coefficients: np.ndarray, factors: dict,
     
     for i, factor in enumerate(required_factors):
         forecast += coefficients[i + 1] * factors[factor]
-    
+
     return forecast
 
+# === SECTION 5: ROLLING ESTIMATION ===
 
-# === SECTION 5: ALPHA ANALYSIS ===
+def rolling_capm(data: pd.DataFrame, window: int, step: int = 1) -> pd.DataFrame:
+    """Generate rolling CAPM estimates over the provided data."""
+    results = []
+    for start in range(0, len(data) - window + 1, step):
+        window_df = data.iloc[start:start + window]
+        try:
+            alpha, beta, metrics = estimate_capm(window_df, min_obs=window, validate_data=False)
+        except ValueError:
+            continue
+        metrics.update({
+            'start': window_df['date'].iloc[0],
+            'end': window_df['date'].iloc[-1],
+            'alpha': alpha,
+            'beta': beta,
+        })
+        results.append(metrics)
+    return pd.DataFrame(results)
+
+# === SECTION 6: ALPHA ANALYSIS ===
 
 def analyze_alpha_persistence(results_df: pd.DataFrame, 
                             percentile_cutoff: int = 50) -> Dict[str, any]:
@@ -756,14 +735,24 @@ def diagnose_estimation_quality(alpha: float, beta: float, stats: dict) -> Dict[
     
     # Noise-to-signal ratio
     if 'residual_std' in stats and 'market_excess_std' in stats and stats['market_excess_std'] > 0:
-        noise_ratio = stats['residual_std'] / (beta * stats['market_excess_std'])
-        if noise_ratio > 3:
-            diagnostics['noise_ratio'] = {
-                'severity': 'MEDIUM',
-                'message': f'Very high idiosyncratic risk (noise ratio={noise_ratio:.1f}), alpha estimates unreliable'
-            }
-        elif noise_ratio > 5:
-            diagnostics['noise_ratio']['severity'] = 'HIGH'
+        if stats['market_excess_std'] > 0 and beta != 0:
+            noise_ratio = stats['residual_std'] / (beta * stats['market_excess_std'])
+            if noise_ratio > 5:
+                diagnostics['noise_ratio'] = {
+                    'severity': 'HIGH',
+                    'message': (
+                        f'Very high idiosyncratic risk (noise ratio={noise_ratio:.1f}), '
+                        'alpha estimates unreliable'
+                    ),
+                }
+            elif noise_ratio > 3:
+                diagnostics['noise_ratio'] = {
+                    'severity': 'MEDIUM',
+                    'message': (
+                        f'Very high idiosyncratic risk (noise ratio={noise_ratio:.1f}), '
+                        'alpha estimates unreliable'
+                    ),
+                }
     
     # Multicollinearity (for multi-factor models)
     if 'max_vif' in stats and stats['max_vif'] > 10:

@@ -3,171 +3,181 @@ data_loader.py - Data loading and preprocessing functions.
 Handles CRSP stock data and Fama-French factor data with comprehensive validation.
 """
 
-import pandas as pd
-import numpy as np
-from typing import Tuple, Optional, Dict
-import warnings
+import logging
 from datetime import datetime
+from typing import Tuple, Optional, Dict
 
-from config import DATA_PATHS, DATA_FILTERS, PRESENTATION_CONFIG
+import numpy as np
+import pandas as pd
+
+from config import DATA_PATHS, DATA_FILTERS, MODEL_CONFIG, PRESENTATION_CONFIG
+
+
+logger = logging.getLogger(__name__)
 
 # === SECTION 1: DATA LOADING FUNCTIONS ===
 
+def _winsorize_series(series: pd.Series, level: float) -> pd.Series:
+    """Winsorize a series at the given two-sided level."""
+    lower = series.quantile(level)
+    upper = series.quantile(1 - level)
+    return series.clip(lower=lower, upper=upper)
+
+
 def load_crsp_data(filepath: str = None) -> pd.DataFrame:
-    """
-    Load CRSP data from parquet file with validation.
-    
-    Returns:
-        DataFrame with columns: PERMNO, date, SHRCD, EXCHCD, PRC, RET, SHROUT, vwretd
-    """
+    """Load CRSP data from parquet file with validation."""
     if filepath is None:
         filepath = DATA_PATHS['crsp_file']
-    
-    print(f"\nLoading CRSP data from {filepath}...")
-    
+
+    logger.info("Loading CRSP data from %s", filepath)
+
     try:
-        df = pd.read_parquet(filepath)
-    except FileNotFoundError:
-        raise FileNotFoundError(f"CRSP data file not found: {filepath}")
-    except Exception as e:
-        raise Exception(f"Error loading CRSP data: {str(e)}")
-    
+        # Use fastparquet engine to avoid pyarrow extension issues in minimal setups
+        df = pd.read_parquet(filepath, engine="fastparquet")
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"CRSP data file not found: {filepath}") from exc
+    except Exception as exc:  # pragma: no cover - unexpected read errors
+        raise Exception(f"Error loading CRSP data: {str(exc)}") from exc
+
     # Standardize column names (ensure uppercase)
     df.columns = df.columns.str.upper()
-    
+
     # Required columns
     required_cols = ['PERMNO', 'DATE', 'SHRCD', 'EXCHCD', 'PRC', 'RET', 'SHROUT']
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
         raise ValueError(f"Missing required CRSP columns: {missing_cols}")
-    
+
     # Standardize datatypes
-    print("Standardizing data types...")
+    logger.debug("Standardizing data types")
     df['DATE'] = pd.to_datetime(df['DATE'])
     df['PERMNO'] = df['PERMNO'].astype(int)
-    
+
     # Numeric columns - handle CRSP-specific issues
     numeric_cols = ['PRC', 'RET', 'SHROUT', 'VWRETD', 'SPRTRN']
     for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
-    
+
     # Handle CRSP-specific data issues
     # PRC < 0 indicates bid-ask average
     df['ABS_PRC'] = df['PRC'].abs()
-    
+
     # RET = -66.0 to -99.0 are CRSP missing codes
     df.loc[df['RET'] <= -66.0, 'RET'] = np.nan
-    
+
+    # Optional winsorization
+    if MODEL_CONFIG.get('winsorize_returns', False):
+        level = MODEL_CONFIG.get('winsorize_level', 0.001)
+        df['RET'] = _winsorize_series(df['RET'], level)
+
     # Convert RET to percentage if needed (CRSP usually provides as decimal)
     # Check if returns are likely in decimal format (small values)
     ret_mean = df['RET'].dropna().mean()
     if abs(ret_mean) < 0.01:  # Likely in decimal format
-        print("Returns appear to be in decimal format (as expected)")
+        logger.debug("Returns appear to be in decimal format (as expected)")
     else:
-        print(f"WARNING: Returns may not be in decimal format. Mean return = {ret_mean}")
-    
+        logger.warning("Returns may not be in decimal format. Mean return = %s", ret_mean)
+
     # Apply filters if specified
     initial_obs = len(df)
     initial_stocks = df['PERMNO'].nunique()
-    
+
     # Date filter
     if 'start_date' in DATA_FILTERS and 'end_date' in DATA_FILTERS:
         start_date = pd.to_datetime(DATA_FILTERS['start_date'])
         end_date = pd.to_datetime(DATA_FILTERS['end_date'])
         df = df[(df['DATE'] >= start_date) & (df['DATE'] <= end_date)]
-    
+
     # Share code filter (common stocks)
     if 'shrcd_codes' in DATA_FILTERS:
         df = df[df['SHRCD'].isin(DATA_FILTERS['shrcd_codes'])]
-    
+
     # Exchange filter
     if 'exchcd_codes' in DATA_FILTERS:
         df = df[df['EXCHCD'].isin(DATA_FILTERS['exchcd_codes'])]
-    
+
     # Price filter (penny stocks)
     if 'min_price' in DATA_FILTERS:
         df = df[df['ABS_PRC'] >= DATA_FILTERS['min_price']]
-    
+
     # Basic data quality filters
     df = df[df['SHROUT'] > 0]  # Must have shares outstanding
     df = df[df['RET'].notna()]  # Must have return data
-    
+
     # Rename DATE to date for consistency
     df = df.rename(columns={'DATE': 'date'})
-    
-    print(f"Loaded {len(df):,} observations for {df['PERMNO'].nunique():,} stocks")
-    print(f"Date range: {df['date'].min()} to {df['date'].max()}")
-    print(f"Filtered from {initial_obs:,} observations and {initial_stocks:,} stocks")
-    
+
+    logger.info(
+        "Loaded %s observations for %s stocks", f"{len(df):,}", f"{df['PERMNO'].nunique():,}"
+    )
+    logger.debug("Date range: %s to %s", df['date'].min(), df['date'].max())
+    logger.debug(
+        "Filtered from %s observations and %s stocks", f"{initial_obs:,}", f"{initial_stocks:,}"
+    )
+
     return df
 
 
 def load_ff_factors(filepath: str = None, factor_model: str = 'ff3') -> pd.DataFrame:
-    """
-    Load Fama-French factor data with validation.
-    
-    Args:
-        filepath: Path to FF factor file
-        factor_model: 'ff3' or 'ff5'
-    
-    Returns:
-        DataFrame with columns: date, Mkt-RF, SMB, HML, RF (and RMW, CMA for ff5)
-    """
+    """Load Fama-French factor data with validation."""
     if filepath is None:
-        filepath = DATA_PATHS['ff_factors'] if factor_model == 'ff3' else DATA_PATHS['ff5_factors']
-    
-    print(f"\nLoading Fama-French {factor_model.upper()} factors...")
-    
+        if factor_model == 'ff3':
+            filepath = DATA_PATHS['ff_factors']
+        else:
+            raise ValueError("FF5 factor data file must be provided via 'filepath'.")
+
+    logger.info("Loading Fama-French %s factors", factor_model.upper())
+
     try:
         # Skip the 3-line preamble
         df = pd.read_csv(filepath, skiprows=3)
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Fama-French data file not found: {filepath}")
-    except Exception as e:
-        raise Exception(f"Error loading Fama-French data: {str(e)}")
-    
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Fama-French data file not found: {filepath}") from exc
+    except Exception as exc:  # pragma: no cover - unexpected read errors
+        raise Exception(f"Error loading Fama-French data: {str(exc)}") from exc
+
     # Rename date column
     if 'Unnamed: 0' in df.columns:
         df.rename(columns={'Unnamed: 0': 'date'}, inplace=True)
-    
+
     # Drop any bottom rows whose date isn't eight digits
     mask = df['date'].astype(str).str.match(r'^\d{8}$')
     df = df.loc[mask].copy()
-    
+
     # Parse dates
     df['date'] = pd.to_datetime(df['date'], format='%Y%m%d')
-    
+
     # Identify factor columns based on model
     if factor_model == 'ff3':
         factor_cols = ['Mkt-RF', 'SMB', 'HML', 'RF']
     else:
         factor_cols = ['Mkt-RF', 'SMB', 'HML', 'RMW', 'CMA', 'RF']
-    
+
     # Check for missing columns
     missing_cols = [col for col in factor_cols if col not in df.columns]
     if missing_cols:
         raise ValueError(f"Missing Fama-French factors: {missing_cols}")
-    
+
     # Convert to numeric
     for col in factor_cols:
         df[col] = pd.to_numeric(df[col], errors='coerce')
-    
+
     # Check if factors are in percentage or decimal format
     mkt_mean = df['Mkt-RF'].dropna().mean()
     if abs(mkt_mean) > 0.1:  # Likely in percentage format
-        print(f"Factors appear to be in percentage format (mean market = {mkt_mean:.3f})")
-        print("Converting to decimal format to match CRSP returns...")
+        logger.debug("Factors appear to be in percentage format (mean market = %.3f)", mkt_mean)
+        logger.debug("Converting to decimal format to match CRSP returns")
         for col in factor_cols:
             df[col] = df[col] / 100
     else:
-        print("Factors appear to be in decimal format")
-    
+        logger.debug("Factors appear to be in decimal format")
+
     # Keep only necessary columns
     df = df[['date'] + factor_cols]
-    
-    print(f"Loaded factors from {df['date'].min()} to {df['date'].max()}")
-    
+
+    logger.info("Loaded factors from %s to %s", df['date'].min(), df['date'].max())
+
     return df
 
 
@@ -183,7 +193,7 @@ def prepare_analysis_data(crsp_df: pd.DataFrame,
     Returns:
         Merged DataFrame ready for analysis
     """
-    print("\nMerging CRSP and Fama-French data...")
+    logger.info("Merging CRSP and Fama-French data")
     
     # Merge on date (inner join to keep only dates with both data sources)
     df = crsp_df.merge(ff_df, on='date', how='inner')
@@ -200,18 +210,30 @@ def prepare_analysis_data(crsp_df: pd.DataFrame,
             extreme_mask = df['RET'].abs() <= DATA_FILTERS['max_return']
             n_extreme = (~extreme_mask).sum()
             if n_extreme > 0:
-                print(f"Removing {n_extreme:,} observations with returns > {DATA_FILTERS['max_return']*100:.0f}%")
+                logger.warning(
+                    "Removing %s observations with returns > %.0f%%",
+                    f"{n_extreme:,}",
+                    DATA_FILTERS['max_return'] * 100,
+                )
             df = df[extreme_mask]
         
         if 'min_market_cap' in DATA_FILTERS and DATA_FILTERS['min_market_cap'] > 0:
             df = df[df['market_cap'] >= DATA_FILTERS['min_market_cap']]
         
-        print(f"Additional filters: {initial_len:,} → {len(df):,} observations")
+        logger.debug(
+            "Additional filters: %s → %s observations",
+            f"{initial_len:,}",
+            f"{len(df):,}",
+        )
     
     # Sort by PERMNO and date for efficient processing
     df = df.sort_values(['PERMNO', 'date']).reset_index(drop=True)
     
-    print(f"Final dataset: {len(df):,} observations for {df['PERMNO'].nunique():,} stocks")
+    logger.info(
+        "Final dataset: %s observations for %s stocks",
+        f"{len(df):,}",
+        f"{df['PERMNO'].nunique():,}",
+    )
     
     if validate:
         validate_merged_data(df)

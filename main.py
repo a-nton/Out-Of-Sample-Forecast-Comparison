@@ -5,12 +5,44 @@ Orchestrates the complete analysis pipeline with validation and diagnostics.
 
 import sys
 import os
+import importlib
+import subprocess
+import warnings
+warnings.filterwarnings('ignore')
+
+# Ensure required third-party packages are available
+REQUIRED_PACKAGES = [
+    'pandas',
+    'numpy',
+    'statsmodels',
+    'scikit-learn',
+    'matplotlib',
+    'seaborn',
+    'scipy',
+    'pyarrow',
+    'fastparquet'
+]
+
+
+def ensure_dependencies(packages=REQUIRED_PACKAGES):
+    """Install missing dependencies for smooth execution."""
+    missing = []
+    for pkg in packages:
+        try:
+            importlib.import_module(pkg)
+        except ImportError:
+            missing.append(pkg)
+    if missing:
+        print("Installing missing packages: " + ", ".join(missing))
+        subprocess.check_call([sys.executable, '-m', 'pip', 'install', *missing])
+
+
+ensure_dependencies()
+
 import pandas as pd
 import numpy as np
 from datetime import datetime
 import time
-import warnings
-warnings.filterwarnings('ignore')
 
 # Add src to path if using modular structure
 sys.path.append('src')
@@ -74,15 +106,9 @@ def main():
     print("="*70)
     
     # Load data
-    try:
-        crsp_df = load_crsp_data()
-        ff_df = load_ff_factors(factor_model=MODEL_CONFIG['base_model'][:3])
-    except Exception as e:
-        print(f"\nERROR loading data: {str(e)}")
-        print("Please ensure data files are in the correct location:")
-        print(f"  - {DATA_PATHS['crsp_file']}")
-        print(f"  - {DATA_PATHS['ff_factors']}")
-        return
+    crsp_df = load_crsp_data()
+    # For CAPM we still use FF3 file but only Mkt-RF and RF columns
+    ff_df = load_ff_factors()
     
     # Merge and prepare
     merged_df = prepare_analysis_data(crsp_df, ff_df, apply_filters=True, validate=True)
@@ -162,7 +188,7 @@ def main():
             try:
                 # Estimate model based on configuration
                 if MODEL_CONFIG['base_model'] == 'capm':
-                    alpha, beta, stats = estimate_capm(
+                    alpha, beta, metrics = estimate_capm(
                         sample['estimation_data'],
                         min_obs=SAMPLING_CONFIG['min_observations'],
                         validate_data=(i == 0)  # Validate only first estimation
@@ -177,7 +203,7 @@ def main():
                     forecast_zero = forecast_capm_return(alpha, beta, mkt_excess, rf, use_alpha=False)
                     
                 elif MODEL_CONFIG['base_model'] == 'ff3':
-                    coefficients, stats = estimate_ff3(
+                    coefficients, metrics = estimate_ff3(
                         sample['estimation_data'],
                         min_obs=SAMPLING_CONFIG['min_observations'],
                         validate_data=(i == 0)
@@ -205,7 +231,7 @@ def main():
                 
                 # Diagnostics
                 if MODEL_CONFIG.get('diagnose_models', True):
-                    diagnostics = diagnose_estimation_quality(alpha, beta, stats)
+                    diagnostics = diagnose_estimation_quality(alpha, beta, metrics)
                     if diagnostics:
                         all_diagnostics.append(diagnostics)
                         # Only print warnings for severe issues
@@ -306,7 +332,9 @@ def main():
         print(f"RMSE with alpha:    {format_percentage(rmse_alpha)} [{format_percentage(ci_alpha[0])}, {format_percentage(ci_alpha[1])}]")
         print(f"RMSE without alpha: {format_percentage(rmse_zero)} [{format_percentage(ci_zero[0])}, {format_percentage(ci_zero[1])}]")
         print(f"Improvement:        {horizon_results[horizon]['rmse_improvement_pct']:.2f}%")
+        # t_stat > 0 implies model with alpha has higher mean error; low p-values (<0.05) reject equal performance
         print(f"Paired t-test:      t={t_stat:.3f}, p={p_val:.4f}")
+        # DM > 0 means model with alpha has higher loss; small p-values denote significant accuracy differences
         print(f"Diebold-Mariano:    DM={dm_stat:.3f}, p={dm_pval:.4f}")
     
     # === SECTION 6: ADDITIONAL ANALYSES ===
@@ -375,20 +403,32 @@ def main():
     if 1 in horizon_results:
         figures['error_comparison'] = plot_error_comparison(
             horizon_results[1]['errors_alpha'],
-            horizon_results[1]['errors_zero']
+            horizon_results[1]['errors_zero'],
+            error_range=PRESENTATION_CONFIG['axis_limits'].get('error_range'),
+            scatter_range=PRESENTATION_CONFIG['axis_limits'].get('scatter_range')
         )
-        
+
         figures['parameter_distributions'] = plot_parameter_distributions(
-            horizon_results[1]['results_df']
+            horizon_results[1]['results_df'],
+            alpha_range=PRESENTATION_CONFIG['axis_limits'].get('alpha_range'),
+            beta_range=PRESENTATION_CONFIG['axis_limits'].get('beta_range')
         )
     
     # Multi-horizon analysis
     if len(SAMPLING_CONFIG['forecast_horizons']) > 1:
-        figures['horizon_analysis'] = plot_horizon_analysis(horizon_results)
+        figures['horizon_analysis'] = plot_horizon_analysis(
+            horizon_results,
+            rmse_ylim=PRESENTATION_CONFIG['axis_limits'].get('horizon_rmse_ylim'),
+            improve_ylim=PRESENTATION_CONFIG['axis_limits'].get('horizon_improve_ylim')
+        )
     
     # Size analysis
     if ANALYSIS_CONFIG['analyze_by_size'] and 'market_cap' in main_results.columns:
-        figures['size_analysis'] = plot_size_analysis(main_results)
+        figures['size_analysis'] = plot_size_analysis(
+            main_results,
+            rmse_ylim=PRESENTATION_CONFIG['axis_limits'].get('size_rmse_ylim'),
+            beta_ylim=PRESENTATION_CONFIG['axis_limits'].get('size_beta_ylim')
+        )
     
     # Save all figures
     save_all_figures(figures, base_path=os.path.join(OUTPUT_CONFIG['results_dir'], 'figures'))
