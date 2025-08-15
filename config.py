@@ -12,7 +12,7 @@ SAMPLING_CONFIG = {
     'min_observations': 150,             # Minimum non-missing returns required
     'forecast_horizons': [1, 5, 10, 20], # Forecast horizons in days
     'random_seed': 42,                   # For reproducibility
-    'max_attempts_multiplier': 100,      # Max attempts = n_samples * this
+    'max_attempts_multiplier': 20,       # Max attempts = n_samples * this
 }
 
 # === SECTION 2: DATA FILTERS ===

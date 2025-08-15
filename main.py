@@ -8,30 +8,36 @@ import os
 import importlib
 import subprocess
 import warnings
+from pathlib import Path
 warnings.filterwarnings('ignore')
 
-# Ensure required third-party packages are available
-REQUIRED_PACKAGES = [
-    'pandas',
-    'numpy',
-    'statsmodels',
-    'scikit-learn',
-    'matplotlib',
-    'seaborn',
-    'scipy',
-    'pyarrow',
-    'fastparquet'
-]
+# Resolve project base directory to the location of this file
+BASE_DIR = Path(__file__).resolve().parent
+os.chdir(BASE_DIR)
+
+# Ensure required third-party packages are available. Mapping is
+# {package_name_for_pip: module_name_for_import}
+REQUIRED_PACKAGES = {
+    'pandas': 'pandas',
+    'numpy': 'numpy',
+    'statsmodels': 'statsmodels',
+    'scikit-learn': 'sklearn',
+    'matplotlib': 'matplotlib',
+    'seaborn': 'seaborn',
+    'scipy': 'scipy',
+    'pyarrow': 'pyarrow',
+    'fastparquet': 'fastparquet'
+}
 
 
 def ensure_dependencies(packages=REQUIRED_PACKAGES):
     """Install missing dependencies for smooth execution."""
     missing = []
-    for pkg in packages:
+    for pkg_name, import_name in packages.items():
         try:
-            importlib.import_module(pkg)
+            importlib.import_module(import_name)
         except ImportError:
-            missing.append(pkg)
+            missing.append(pkg_name)
     if missing:
         print("Installing missing packages: " + ", ".join(missing))
         subprocess.check_call([sys.executable, '-m', 'pip', 'install', *missing])
@@ -45,7 +51,7 @@ from datetime import datetime
 import time
 
 # Add src to path if using modular structure
-sys.path.append('src')
+sys.path.append(str(BASE_DIR / 'src'))
 
 # Import all modules
 from config import *
@@ -258,7 +264,7 @@ def main():
                     'error_alpha': error_alpha,
                     'error_zero': error_zero,
                     'market_cap': sample.get('mean_market_cap', np.nan),
-                    **stats  # Include model statistics
+                    **metrics  # Include model metrics
                 }
                 
                 results.append(result)
