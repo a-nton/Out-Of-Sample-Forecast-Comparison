@@ -192,13 +192,35 @@ def prepare_analysis_data(crsp_df: pd.DataFrame,
     """
     Merge CRSP and FF data and apply optional filters.
 
+    The returned DataFrame includes a market return series ``MKT`` drawn
+    from the CRSP value-weighted index so that CAPM estimations use the
+    same market definition as value-weighted beta calculations.
+
     Returns:
         Merged DataFrame ready for analysis
     """
     logger.info("Merging CRSP and Fama-French data")
-    
+
     # Merge on date (inner join to keep only dates with both data sources)
     df = crsp_df.merge(ff_df, on='date', how='inner')
+
+    # Use CRSP value-weighted market return to ensure consistency with
+    # later beta calculations.  This provides a market series built from
+    # the same universe and weighting scheme used in ``calculate_vw_beta``.
+    if 'VWRETD' in df.columns:
+        df = df.rename(columns={'VWRETD': 'MKT'})
+    else:  # pragma: no cover - unlikely fallback
+        logger.warning('VWRETD missing, computing value-weighted market return')
+        temp = crsp_df.copy()
+        temp['abs_prc'] = temp['PRC'].abs()
+        temp['market_cap'] = temp['abs_prc'] * temp['SHROUT'] / 1000
+        mkt_series = (
+            temp.groupby('date')
+                .apply(lambda x: (x['RET'] * x['market_cap']).sum() / x['market_cap'].sum())
+                .rename('MKT')
+                .reset_index()
+        )
+        df = df.merge(mkt_series, on='date', how='left')
     
     # Add calculated fields
     df['abs_prc'] = df['PRC'].abs()
@@ -255,7 +277,7 @@ def validate_merged_data(df: pd.DataFrame) -> Dict[str, any]:
     
     # 1. Check required columns
     print("\n1. Column Validation:")
-    required_cols = ['PERMNO', 'date', 'RET', 'RF', 'Mkt-RF', 'PRC', 'SHROUT', 'market_cap']
+    required_cols = ['PERMNO', 'date', 'RET', 'RF', 'MKT', 'PRC', 'SHROUT', 'market_cap']
     missing = [col for col in required_cols if col not in df.columns]
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
@@ -305,7 +327,7 @@ def validate_merged_data(df: pd.DataFrame) -> Dict[str, any]:
     
     # 4. Factor correlations
     print("\n4. Factor Correlations:")
-    factors = ['Mkt-RF', 'SMB', 'HML'] if 'SMB' in df.columns else ['Mkt-RF']
+    factors = ['MKT', 'SMB', 'HML'] if 'SMB' in df.columns else ['MKT']
     if len(factors) > 1:
         corr_matrix = df[factors].corr()
         print(corr_matrix.round(3))

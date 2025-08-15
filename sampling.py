@@ -298,7 +298,7 @@ def sample_events(merged_data: pd.DataFrame,
             forecast_data = stock_data.iloc[forecast_idx]
             
             # Validate forecast day
-            if pd.isna(forecast_data['RET']) or pd.isna(forecast_data['Mkt-RF']):
+            if pd.isna(forecast_data['RET']) or pd.isna(forecast_data['MKT']):
                 valid_for_all_horizons = False
                 window_tracker.record_rejection(f"missing_forecast_h{horizon}")
                 break
@@ -445,7 +445,7 @@ def sample_events_value_weighted(merged_data: pd.DataFrame,
                 window_tracker.record_rejection(f"no_data_h{horizon}")
                 break
             forecast_data = stock_data.iloc[forecast_idx]
-            if pd.isna(forecast_data['RET']) or pd.isna(forecast_data['Mkt-RF']):
+            if pd.isna(forecast_data['RET']) or pd.isna(forecast_data['MKT']):
                 valid_for_all_horizons = False
                 window_tracker.record_rejection(f"missing_forecast_h{horizon}")
                 break
