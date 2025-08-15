@@ -241,7 +241,9 @@ def validate_weight_distribution(weights: pd.DataFrame,
         )
 
     if verbose:
-        by_stock = weights.groupby('PERMNO')['weight'].sum()
+        # Average weights across time to avoid double counting stocks
+        # with longer histories. This yields a time-normalized distribution.
+        by_stock = weights.groupby('PERMNO')['weight'].mean()
         top10 = by_stock.nlargest(min(10, len(by_stock))).sum()
         top50 = by_stock.nlargest(min(50, len(by_stock))).sum()
         print(
