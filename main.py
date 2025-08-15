@@ -65,7 +65,7 @@ from models import (
 )
 from sampling import sample_events_value_weighted, analyze_sample_characteristics, validate_sampling_randomness
 from evaluation import (
-    calculate_forecast_errors, calculate_rmse, calculate_mae, paired_t_test,
+    calculate_forecast_errors, calculate_rmse, calculate_mae,
     diebold_mariano_test, bootstrap_rmse, analyze_by_characteristic,
     analyze_alpha_subset, calculate_vw_statistics, create_evaluation_report,
     create_forecast_comparison_table
@@ -75,6 +75,8 @@ from visualization import (
     plot_horizon_analysis, plot_size_analysis, create_summary_table,
     save_all_figures, adjust_figure_for_presentation
 )
+
+from scipy import stats
 
 # Import validation module if it exists
 try:
@@ -321,7 +323,8 @@ def main():
         mae_zero = calculate_mae(errors_zero)
         
         # Statistical tests
-        t_stat, p_val = paired_t_test(errors_alpha, errors_zero)
+        diff = np.abs(errors_alpha) - np.abs(errors_zero)
+        t_stat, p_val = stats.ttest_1samp(diff, 0.0, nan_policy='omit')
         dm_stat, dm_pval, dm_details = diebold_mariano_test(errors_alpha, errors_zero, horizon=horizon)
         
         # Bootstrap CIs

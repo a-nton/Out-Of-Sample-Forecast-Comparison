@@ -160,17 +160,16 @@ def diebold_mariano_test(errors1: np.ndarray, errors2: np.ndarray,
     d_mean = np.mean(d)
     
     # Calculate HAC variance using Newey-West
-    # For h-step ahead forecast, include h-1 lags
+    # Use maxlag = max(1, horizon-1) to handle serial correlation
+    maxlag = max(1, horizon - 1)
     gamma = [np.var(d, ddof=1)]  # Variance at lag 0
-    
-    if horizon > 1:
-        for h in range(1, horizon):
-            if h < len(d):
-                # Calculate autocovariance at lag h
-                cov_h = np.cov(d[:-h], d[h:])[0, 1]
-                # Newey-West weight
-                weight = 1 - h / horizon
-                gamma.append(weight * cov_h)
+
+    for h in range(1, min(maxlag + 1, len(d))):
+        # Calculate autocovariance at lag h
+        cov_h = np.cov(d[:-h], d[h:])[0, 1]
+        # Newey-West weight with truncation parameter maxlag
+        weight = 1 - h / (maxlag + 1)
+        gamma.append(weight * cov_h)
     
     # Long-run variance
     lr_variance = gamma[0] + 2 * sum(gamma[1:])
@@ -654,18 +653,19 @@ def analyze_horizon_effects(results_by_horizon: Dict[int, pd.DataFrame]) -> pd.D
         
         # Statistical tests
         if len(results) > 1:
-            # Paired t-test
-            t_stat, p_val = paired_t_test(errors_alpha, errors_zero)
+            # Paired t-test on absolute error differences for this horizon
+            diff = np.abs(errors_alpha) - np.abs(errors_zero)
+            t_stat, p_val = stats.ttest_1samp(diff, 0.0, nan_policy='omit')
             metrics['t_statistic'] = t_stat
             metrics['p_value'] = p_val
-            
+
             # Diebold-Mariano test
             dm_stat, dm_pval, dm_details = diebold_mariano_test(
                 errors_alpha, errors_zero, horizon=horizon
             )
             metrics['dm_statistic'] = dm_stat
             metrics['dm_pvalue'] = dm_pval
-            
+
             # Sign test
             sign_stat, sign_pval = sign_test(errors_alpha, errors_zero)
             metrics['sign_test_stat'] = sign_stat

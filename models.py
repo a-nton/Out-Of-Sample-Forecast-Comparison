@@ -11,12 +11,13 @@ import warnings
 import statsmodels.api as sm
 from scipy import stats
 
-from config import MODEL_CONFIG, PRESENTATION_CONFIG
+from config import MODEL_CONFIG, PRESENTATION_CONFIG, OUTPUT_CONFIG
 
 # === SECTION 1: DATA VALIDATION AND COLUMN CHECKING ===
 
-def validate_columns(data: pd.DataFrame, required_cols: List[str], 
-                    model_name: str = "Model") -> Dict[str, str]:
+def validate_columns(data: pd.DataFrame, required_cols: List[str],
+                    model_name: str = "Model",
+                    verbose: bool = False) -> Dict[str, str]:
     """
     Validate that required columns exist and check their data types.
     
@@ -57,7 +58,7 @@ def validate_columns(data: pd.DataFrame, required_cols: List[str],
                     raise TypeError(f"Cannot convert column '{col}' to numeric type") from exc
     
     # Print validation summary if verbose
-    if MODEL_CONFIG.get('validate_estimations', True):
+    if verbose and MODEL_CONFIG.get('validate_estimations', True):
         print(f"\n{model_name} Column Validation:")
         print("-" * 50)
         for col, dtype in col_types.items():
@@ -246,7 +247,9 @@ def estimate_capm(data: pd.DataFrame,
     # Validate columns if requested
     if validate_data:
         required_cols = ['RET', 'RF', 'Mkt-RF']
-        col_types = validate_columns(data, required_cols, "CAPM")
+        col_types = validate_columns(
+            data, required_cols, "CAPM", verbose=OUTPUT_CONFIG.get('verbose', False)
+        )
         data_quality = check_estimation_data_quality(data)
     
     # Prepare data - ensure we have numeric arrays
@@ -338,7 +341,9 @@ def estimate_ff3(data: pd.DataFrame,
     # Validate columns
     if validate_data:
         required_cols = ['RET', 'RF', 'Mkt-RF', 'SMB', 'HML']
-        col_types = validate_columns(data, required_cols, "FF3")
+        col_types = validate_columns(
+            data, required_cols, "FF3", verbose=OUTPUT_CONFIG.get('verbose', False)
+        )
     
     # Prepare data
     y = pd.to_numeric(data['RET'] - data['RF'], errors='coerce').values
