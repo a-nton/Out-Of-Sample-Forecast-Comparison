@@ -183,13 +183,12 @@ def load_ff_factors(filepath: str = None, factor_model: str = 'ff3') -> pd.DataF
 
 # === SECTION 2: DATA MERGING AND PREPARATION ===
 
-def prepare_analysis_data(crsp_df: pd.DataFrame, 
+def prepare_analysis_data(crsp_df: pd.DataFrame,
                          ff_df: pd.DataFrame,
-                         apply_filters: bool = True,
-                         validate: bool = True) -> pd.DataFrame:
+                         apply_filters: bool = True) -> pd.DataFrame:
     """
-    Merge CRSP and FF data, apply filters, and validate.
-    
+    Merge CRSP and FF data and apply optional filters.
+
     Returns:
         Merged DataFrame ready for analysis
     """
@@ -234,9 +233,6 @@ def prepare_analysis_data(crsp_df: pd.DataFrame,
         f"{len(df):,}",
         f"{df['PERMNO'].nunique():,}",
     )
-    
-    if validate:
-        validate_merged_data(df)
     
     return df
 

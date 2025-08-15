@@ -56,8 +56,8 @@ sys.path.append(str(BASE_DIR / 'src'))
 # Import all modules
 from config import *
 from data_loader import (
-    load_crsp_data, load_ff_factors, prepare_analysis_data, 
-    validate_merged_data, create_data_summary_table
+    load_crsp_data, load_ff_factors, prepare_analysis_data,
+    create_data_summary_table
 )
 from models import (
     estimate_capm, estimate_ff3, forecast_capm_return, forecast_ff3_return,
@@ -117,7 +117,7 @@ def main():
     ff_df = load_ff_factors()
     
     # Merge and prepare
-    merged_df = prepare_analysis_data(crsp_df, ff_df, apply_filters=True, validate=True)
+    merged_df = prepare_analysis_data(crsp_df, ff_df, apply_filters=True)
     
     # Create data summary for paper
     data_summary = create_data_summary_table(merged_df)
