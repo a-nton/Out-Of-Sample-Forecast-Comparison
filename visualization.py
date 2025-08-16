@@ -11,6 +11,7 @@ from typing import Dict, Optional, List
 from scipy import stats
 
 from config import OUTPUT_CONFIG, PRESENTATION_CONFIG
+from evaluation import calculate_rmse
 
 # === SECTION 1: SETUP ===
 
@@ -375,4 +376,56 @@ def rescale_axes(fig: plt.Figure,
             ax.set_xlim(xlim)
         if ylim is not None:
             ax.set_ylim(ylim)
+    return fig
+
+
+# === SECTION 8: MODEL COMPARISON PLOT ===
+
+def plot_model_comparison(results_df: pd.DataFrame) -> plt.Figure:
+    """Create 2x2 comparison plot for CAPM vs FF3."""
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+
+    models = ['CAPM+α', 'CAPM', 'FF3+α', 'FF3']
+    rmses = [
+        calculate_rmse(results_df['error_capm_alpha']),
+        calculate_rmse(results_df['error_capm_zero']),
+        calculate_rmse(results_df['error_ff3_alpha']),
+        calculate_rmse(results_df['error_ff3_zero'])
+    ]
+
+    ax1 = axes[0, 0]
+    colors = ['blue', 'lightblue', 'green', 'lightgreen']
+    ax1.bar(models, np.array(rmses) * 100, color=colors)
+    ax1.set_ylabel('RMSE (%)')
+    ax1.set_title('Forecast Accuracy Comparison')
+
+    ax2 = axes[0, 1]
+    ax2.scatter(results_df['r2_capm'], results_df['r2_ff3'], alpha=0.5)
+    ax2.plot([0, 1], [0, 1], 'r--', label='Equal R²')
+    ax2.set_xlabel('CAPM R²')
+    ax2.set_ylabel('FF3 R²')
+    ax2.set_title('Explanatory Power: FF3 vs CAPM')
+
+    ax3 = axes[1, 0]
+    ax3.scatter(results_df['alpha_capm'] * 100,
+                results_df['alpha_ff3'] * 100, alpha=0.5)
+    ax3.axhline(0, color='black', linestyle='--', alpha=0.5)
+    ax3.axvline(0, color='black', linestyle='--', alpha=0.5)
+    ax3.set_xlabel('CAPM Alpha (%)')
+    ax3.set_ylabel('FF3 Alpha (%)')
+    ax3.set_title('Alpha Comparison')
+
+    ax4 = axes[1, 1]
+    factor_data = [
+        results_df['beta_capm'],
+        results_df['beta_mkt_ff3'],
+        results_df['beta_smb'],
+        results_df['beta_hml']
+    ]
+    ax4.boxplot(factor_data, labels=['CAPM β', 'FF3 β_MKT', 'β_SMB', 'β_HML'])
+    ax4.axhline(0, color='black', linestyle='--', alpha=0.5)
+    ax4.set_title('Factor Loadings Distribution')
+
+    plt.tight_layout()
     return fig

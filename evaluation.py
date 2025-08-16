@@ -1063,5 +1063,57 @@ def check_forecast_quality(results_df: pd.DataFrame) -> Dict[str, any]:
             diagnostics['issues'].append(
                 f"{low_r2} observations ({low_r2/len(results_df)*100:.1f}%) with R² < 0.01"
             )
-    
+
     return diagnostics
+
+
+# === SECTION 7: MODEL COMPARISON UTILITIES ===
+
+def compare_models_performance(results_df: pd.DataFrame) -> Dict[str, float]:
+    """Compare CAPM and FF3 forecast performance without re-estimation."""
+
+    comparisons = {
+        'CAPM with α': calculate_rmse(results_df['error_capm_alpha']),
+        'CAPM no α': calculate_rmse(results_df['error_capm_zero']),
+        'FF3 with α': calculate_rmse(results_df['error_ff3_alpha']),
+        'FF3 no α': calculate_rmse(results_df['error_ff3_zero']),
+    }
+
+    capm_improvement = (
+        (comparisons['CAPM no α'] - comparisons['CAPM with α']) /
+        comparisons['CAPM no α'] * 100 if comparisons['CAPM no α'] else np.nan
+    )
+    ff3_improvement = (
+        (comparisons['FF3 no α'] - comparisons['FF3 with α']) /
+        comparisons['FF3 no α'] * 100 if comparisons['FF3 no α'] else np.nan
+    )
+    ff3_over_capm = (
+        (comparisons['CAPM with α'] - comparisons['FF3 with α']) /
+        comparisons['CAPM with α'] * 100 if comparisons['CAPM with α'] else np.nan
+    )
+
+    print("\n" + "="*60)
+    print("MODEL COMPARISON MATRIX")
+    print("="*60)
+    print(f"{'Model':<20} {'RMSE (%)':<12} {'vs CAPM+α':<15}")
+    print("-"*47)
+
+    baseline = comparisons['CAPM with α']
+    for model, rmse in comparisons.items():
+        diff = (baseline - rmse) / baseline * 100 if baseline else np.nan
+        print(f"{model:<20} {rmse*100:<12.4f} {diff:+.2f}%")
+
+    print("\nKey Insights:")
+    print(f"1. Alpha helps CAPM: {capm_improvement:+.2f}%")
+    print(f"2. Alpha helps FF3:  {ff3_improvement:+.2f}%")
+    print(f"3. FF3 beats CAPM:   {ff3_over_capm:+.2f}%")
+
+    # Statistical test: does FF3 beat CAPM?
+    t_stat, p_val = stats.ttest_rel(
+        results_df['error_ff3_alpha'].abs(),
+        results_df['error_capm_alpha'].abs()
+    )
+    print(f"\nFF3 vs CAPM paired t-test: t={t_stat:.3f}, p={p_val:.4f}")
+    print(f"Average R² improvement from factors: {results_df['r2_increment'].mean():.3f}")
+
+    return comparisons
