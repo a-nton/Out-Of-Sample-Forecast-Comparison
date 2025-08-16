@@ -12,6 +12,39 @@ from statsmodels.stats.diagnostic import acorr_ljungbox
 
 from config import ANALYSIS_CONFIG, PRESENTATION_CONFIG, format_percentage, format_number
 
+# === ANNUALIZATION UTILITIES ===
+
+def calculate_annualized_metrics(daily_alpha: float,
+                                 daily_returns: pd.Series = None) -> dict:
+    """Convert daily metrics to annualized values."""
+
+    trading_days_per_year = 252
+
+    # Simple annualization (approximation)
+    annual_alpha_simple = daily_alpha * trading_days_per_year
+
+    # Compounded annualization (more accurate)
+    annual_alpha_compound = (1 + daily_alpha) ** trading_days_per_year - 1
+
+    metrics = {
+        'daily_alpha_pct': daily_alpha * 100,
+        'annual_alpha_simple_pct': annual_alpha_simple * 100,
+        'annual_alpha_compound_pct': annual_alpha_compound * 100,
+    }
+
+    if daily_returns is not None and len(daily_returns) > 0:
+        annual_return = (1 + daily_returns.mean()) ** trading_days_per_year - 1
+        annual_vol = daily_returns.std() * np.sqrt(trading_days_per_year)
+        sharpe = annual_return / annual_vol if annual_vol > 0 else 0
+
+        metrics.update({
+            'annual_return_pct': annual_return * 100,
+            'annual_volatility_pct': annual_vol * 100,
+            'sharpe_ratio': sharpe
+        })
+
+    return metrics
+
 # === SECTION 1: ERROR METRICS ===
 
 def calculate_forecast_errors(results: List[dict]) -> Tuple[np.ndarray, np.ndarray]:
@@ -817,7 +850,46 @@ def create_evaluation_report(results_df: pd.DataFrame,
         report += f"  Mean: {results_df['beta'].mean():.3f}\n"
         report += f"  Std:  {results_df['beta'].std():.3f}\n"
         report += f"  % > 1: {(results_df['beta'] > 1).mean() * 100:.1f}%\n"
-    
+
+    if 'alpha' in results_df.columns:
+        report += "\n7. ANNUALIZED ALPHA ANALYSIS\n"
+        report += "-" * 30 + "\n"
+
+        mean_daily_alpha = results_df['alpha'].mean()
+        median_daily_alpha = results_df['alpha'].median()
+
+        mean_annual_simple = mean_daily_alpha * 252
+        median_annual_simple = median_daily_alpha * 252
+
+        mean_annual_compound = (1 + mean_daily_alpha) ** 252 - 1
+        median_annual_compound = (1 + median_daily_alpha) ** 252 - 1
+
+        report += f"Daily Alpha:\n"
+        report += f"  Mean:   {mean_daily_alpha*100:>7.4f}%\n"
+        report += f"  Median: {median_daily_alpha*100:>7.4f}%\n\n"
+
+        report += f"Annualized Alpha (Simple):\n"
+        report += f"  Mean:   {mean_annual_simple*100:>7.2f}%\n"
+        report += f"  Median: {median_annual_simple*100:>7.2f}%\n\n"
+
+        report += f"Annualized Alpha (Compound):\n"
+        report += f"  Mean:   {mean_annual_compound*100:>7.2f}%\n"
+        report += f"  Median: {median_annual_compound*100:>7.2f}%\n\n"
+
+        report += f"Distribution of Annualized Alphas:\n"
+        annual_alphas = results_df['alpha'] * 252 * 100
+        report += f"  < -10%:  {(annual_alphas < -10).sum():>3d} ({(annual_alphas < -10).mean()*100:>5.1f}%)\n"
+        report += f"  -10 to 0%: {((annual_alphas >= -10) & (annual_alphas < 0)).sum():>3d} ({((annual_alphas >= -10) & (annual_alphas < 0)).mean()*100:>5.1f}%)\n"
+        report += f"  0 to 10%:  {((annual_alphas >= 0) & (annual_alphas < 10)).sum():>3d} ({((annual_alphas >= 0) & (annual_alphas < 10)).mean()*100:>5.1f}%)\n"
+        report += f"  > 10%:   {(annual_alphas >= 10).sum():>3d} ({(annual_alphas >= 10).mean()*100:>5.1f}%)\n"
+
+        if 'p_alpha' in results_df.columns:
+            sig_5pct = (results_df['p_alpha'] < 0.05).sum()
+            sig_1pct = (results_df['p_alpha'] < 0.01).sum()
+            report += f"\nStatistical Significance:\n"
+            report += f"  Significant at 5%: {sig_5pct} ({sig_5pct/len(results_df)*100:.1f}%)\n"
+            report += f"  Significant at 1%: {sig_1pct} ({sig_1pct/len(results_df)*100:.1f}%)\n"
+
     report += "\n" + "="*70 + "\n"
     
     # Save if requested
@@ -994,8 +1066,79 @@ def create_forecast_comparison_table(results_by_horizon: Dict[int, pd.DataFrame]
             table += " |\n"
         
         table += "\n" + PRESENTATION_CONFIG['table_notes']
-    
+
     return table
+
+
+def create_multi_horizon_summary(horizon_results: Dict[int, dict],
+                                 save_path: Optional[str] = None) -> pd.DataFrame:
+    """Create comprehensive summary table comparing all horizons."""
+
+    summary_data = []
+
+    for horizon in sorted(horizon_results.keys()):
+        h_data = horizon_results[horizon]
+        results_df = h_data['results_df']
+
+        daily_alpha_mean = results_df['alpha'].mean()
+
+        horizon_alpha = daily_alpha_mean * horizon
+        horizon_alpha_compound = (1 + daily_alpha_mean) ** horizon - 1
+
+        annual_alpha = daily_alpha_mean * 252
+        annual_alpha_compound = (1 + daily_alpha_mean) ** 252 - 1
+
+        row = {
+            'Horizon (days)': horizon,
+            'N': h_data['n_samples'],
+            'RMSE (α) %': h_data['rmse_alpha'] * 100,
+            'RMSE (0) %': h_data['rmse_zero'] * 100,
+            'Improvement %': h_data['rmse_improvement_pct'],
+            't-stat': h_data['t_statistic'],
+            'p-value': h_data['p_value'],
+            'DM-stat': h_data['dm_statistic'],
+            'DM p-value': h_data['dm_pvalue'],
+            'Mean α (daily) %': daily_alpha_mean * 100,
+            'Median α (daily) %': results_df['alpha'].median() * 100,
+            'Std α (daily) %': results_df['alpha'].std() * 100,
+            f'α over {horizon}d (simple) %': horizon_alpha * 100,
+            f'α over {horizon}d (compound) %': horizon_alpha_compound * 100,
+            'α (annual simple) %': annual_alpha * 100,
+            'α (annual compound) %': annual_alpha_compound * 100,
+            'Mean β': results_df['beta'].mean(),
+            'Std β': results_df['beta'].std(),
+            'Mean R²': results_df['r_squared'].mean() if 'r_squared' in results_df.columns else np.nan,
+            '% |α| > 0': (results_df['alpha'] != 0).mean() * 100,
+            '% α > 0': (results_df['alpha'] > 0).mean() * 100,
+        }
+
+        if row['p-value'] < 0.01:
+            row['Significance'] = '***'
+        elif row['p-value'] < 0.05:
+            row['Significance'] = '**'
+        elif row['p-value'] < 0.10:
+            row['Significance'] = '*'
+        else:
+            row['Significance'] = ''
+
+        summary_data.append(row)
+
+    summary_df = pd.DataFrame(summary_data)
+
+    if save_path:
+        summary_df.to_csv(save_path, index=False)
+        latex_path = save_path.replace('.csv', '.tex')
+        with open(latex_path, 'w') as f:
+            f.write("\\begin{table}[ht]\n")
+            f.write("\\centering\n")
+            f.write("\\caption{Forecast Performance Across All Horizons}\n")
+            f.write("\\label{tab:all_horizons}\n")
+            f.write("\\resizebox{\\textwidth}{!}{%\n")
+            f.write(summary_df.to_latex(index=False, float_format='%.3f'))
+            f.write("}\n")
+            f.write("\\end{table}\n")
+
+    return summary_df
 
 
 # === SECTION 9: DIAGNOSTIC FUNCTIONS ===
