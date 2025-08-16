@@ -467,28 +467,19 @@ def forecast_capm_return_multiperiod(alpha: float, beta: float,
             return beta * mkt_excess + rf
 
 
-def forecast_ff3_return(coefficients: np.ndarray, factors: dict, 
-                       rf: float, use_alpha: bool = True) -> float:
-    """
-    Generate return forecast using FF3 model.
-    
-    Args:
-        coefficients: [alpha, beta_mkt, beta_smb, beta_hml]
-        factors: Dict with 'Mkt-RF', 'SMB', 'HML' values
-        rf: Risk-free rate
-        use_alpha: Whether to include alpha
-    
-    Returns:
-        Forecasted return
-    """
+def forecast_ff3_return(coefficients: np.ndarray, factors: dict,
+                       rf: float, horizon: int = 1,
+                       use_alpha: bool = True) -> float:
+    """Generate return forecast using FF3 model for multi-period horizons."""
+
     required_factors = ['Mkt-RF', 'SMB', 'HML']
     missing = [f for f in required_factors if f not in factors]
     if missing:
         raise ValueError(f"Missing factors: {missing}")
-    
-    alpha = coefficients[0] if use_alpha else 0
+
+    alpha = coefficients[0] * horizon if use_alpha else 0
     forecast = alpha + rf
-    
+
     for i, factor in enumerate(required_factors):
         forecast += coefficients[i + 1] * factors[factor]
 

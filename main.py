@@ -68,12 +68,12 @@ from evaluation import (
     calculate_forecast_errors, calculate_rmse, calculate_mae,
     diebold_mariano_test, bootstrap_rmse, analyze_by_characteristic,
     analyze_alpha_subset, calculate_vw_statistics, create_evaluation_report,
-    create_forecast_comparison_table
+    create_forecast_comparison_table, compare_models_performance
 )
 from visualization import (
     setup_plot_style, plot_error_comparison, plot_parameter_distributions,
     plot_horizon_analysis, plot_size_analysis, create_summary_table,
-    save_all_figures, adjust_figure_for_presentation
+    save_all_figures, adjust_figure_for_presentation, plot_model_comparison
 )
 
 from scipy import stats
@@ -102,7 +102,7 @@ def main():
     print("="*70)
     print(f"\nStart time: {start_time}")
     print(f"\nConfiguration:")
-    print(f"  Model: {MODEL_CONFIG['base_model'].upper()}")
+    print("  Models: CAPM and FF3")
     print(f"  Samples: {SAMPLING_CONFIG['n_samples']}")
     print(f"  Estimation window: {SAMPLING_CONFIG['estimation_window']} trading days")
     print(f"  Forecast horizons: {SAMPLING_CONFIG['forecast_horizons']}")
@@ -203,101 +203,115 @@ def main():
         
         for i, sample in enumerate(horizon_samples):
             try:
-                # Estimate model based on configuration
-                if MODEL_CONFIG['base_model'] == 'capm':
-                    alpha, beta, metrics = estimate_capm(
-                        sample['estimation_data'],
-                        min_obs=SAMPLING_CONFIG['min_observations'],
-                        validate_data=(i == 0)  # Validate only first estimation
-                    )
-                    
-                    # Generate forecasts with proper horizon handling
-                    if horizon == 1:
-                        forecast_row = sample['forecast_data']
-                        mkt_excess = forecast_row.get('Mkt-RF', forecast_row['MKT'] - forecast_row['RF'])
-                        rf = forecast_row['RF']
-                        actual = forecast_row['RET']
-                    else:
-                        permno = sample['permno']
-                        start_date = sample['estimation_end'] + pd.Timedelta(days=1)
-                        end_date = sample['forecast_date']
+                alpha_capm, beta_capm, metrics_capm = estimate_capm(
+                    sample['estimation_data'],
+                    min_obs=SAMPLING_CONFIG['min_observations'],
+                    validate_data=(i == 0)
+                )
 
-                        horizon_data = merged_df[(merged_df['permno'] == permno) &
-                                                 (merged_df['date'] >= start_date) &
-                                                 (merged_df['date'] <= end_date)]
+                coefficients_ff3, metrics_ff3 = estimate_ff3(
+                    sample['estimation_data'],
+                    min_obs=SAMPLING_CONFIG['min_observations'],
+                    validate_data=False
+                )
 
-                        mkt_excess = horizon_data['Mkt-RF'].sum()
-                        rf = horizon_data['RF'].sum()
-                        actual = horizon_data['RET'].sum()
+                alpha_ff3 = coefficients_ff3[0]
+                beta_mkt_ff3 = coefficients_ff3[1]
+                beta_smb = coefficients_ff3[2]
+                beta_hml = coefficients_ff3[3]
 
-                    forecast_alpha = forecast_capm_return_multiperiod(
-                        alpha, beta, mkt_excess, rf, horizon=horizon, use_alpha=True
-                    )
-                    forecast_zero = forecast_capm_return_multiperiod(
-                        alpha, beta, mkt_excess, rf, horizon=horizon, use_alpha=False
-                    )
-                    
-                elif MODEL_CONFIG['base_model'] == 'ff3':
-                    coefficients, metrics = estimate_ff3(
-                        sample['estimation_data'],
-                        min_obs=SAMPLING_CONFIG['min_observations'],
-                        validate_data=(i == 0)
-                    )
-                    
-                    alpha = coefficients[0]
-                    beta = coefficients[1]  # Market beta
-                    
-                    # Generate forecasts
+                if horizon == 1:
                     forecast_row = sample['forecast_data']
-                    factors = {
-                        'Mkt-RF': forecast_row['Mkt-RF'],
-                        'SMB': forecast_row['SMB'],
-                        'HML': forecast_row['HML']
-                    }
+                    mkt_excess = forecast_row.get('Mkt-RF', forecast_row['MKT'] - forecast_row['RF'])
                     rf = forecast_row['RF']
                     actual = forecast_row['RET']
+                    smb = forecast_row['SMB']
+                    hml = forecast_row['HML']
+                else:
+                    permno = sample['permno']
+                    start_date = sample['estimation_end'] + pd.Timedelta(days=1)
+                    end_date = sample['forecast_date']
 
-                    forecast_alpha = forecast_ff3_return(coefficients, factors, rf, use_alpha=True)
-                    forecast_zero = forecast_ff3_return(coefficients, factors, rf, use_alpha=False)
-                
-                # Calculate errors
-                error_alpha = actual - forecast_alpha
-                error_zero = actual - forecast_zero
-                
-                # Diagnostics
+                    horizon_data = merged_df[(merged_df['permno'] == permno) &
+                                             (merged_df['date'] >= start_date) &
+                                             (merged_df['date'] <= end_date)]
+
+                    mkt_excess = horizon_data['Mkt-RF'].sum()
+                    rf = horizon_data['RF'].sum()
+                    actual = horizon_data['RET'].sum()
+                    smb = horizon_data['SMB'].sum()
+                    hml = horizon_data['HML'].sum()
+
+                factors = {'Mkt-RF': mkt_excess, 'SMB': smb, 'HML': hml}
+
+                forecast_capm_alpha = forecast_capm_return_multiperiod(
+                    alpha_capm, beta_capm, mkt_excess, rf, horizon=horizon, use_alpha=True
+                )
+                forecast_capm_zero = forecast_capm_return_multiperiod(
+                    alpha_capm, beta_capm, mkt_excess, rf, horizon=horizon, use_alpha=False
+                )
+
+                forecast_ff3_alpha = forecast_ff3_return(
+                    coefficients_ff3, factors, rf, horizon=horizon, use_alpha=True
+                )
+                forecast_ff3_zero = forecast_ff3_return(
+                    coefficients_ff3, factors, rf, horizon=horizon, use_alpha=False
+                )
+
+                error_capm_alpha = actual - forecast_capm_alpha
+                error_capm_zero = actual - forecast_capm_zero
+                error_ff3_alpha = actual - forecast_ff3_alpha
+                error_ff3_zero = actual - forecast_ff3_zero
+
                 if MODEL_CONFIG.get('diagnose_models', True):
-                    diagnostics = diagnose_estimation_quality(alpha, beta, metrics)
+                    diagnostics = diagnose_estimation_quality(alpha_capm, beta_capm, metrics_capm)
                     if diagnostics:
                         all_diagnostics.append(diagnostics)
-                        # Only print warnings for severe issues
-                        severe_issues = [d for d in diagnostics.values() 
-                                       if isinstance(d, dict) and d.get('severity') == 'HIGH']
+                        severe_issues = [d for d in diagnostics.values()
+                                         if isinstance(d, dict) and d.get('severity') == 'HIGH']
                         if severe_issues:
                             estimation_issues.append({
                                 'sample': i,
                                 'permno': sample['permno'],
                                 'issues': severe_issues
                             })
-                
-                # Store results
+
                 result = {
                     'permno': sample['permno'],
                     'estimation_end': sample['estimation_end'],
                     'forecast_date': sample['forecast_date'],
                     'horizon': horizon,
-                    'alpha': alpha,
-                    'beta': beta,
+                    # CAPM
+                    'alpha': alpha_capm,
+                    'beta': beta_capm,
+                    'forecast_alpha': forecast_capm_alpha,
+                    'forecast_zero': forecast_capm_zero,
+                    'error_alpha': error_capm_alpha,
+                    'error_zero': error_capm_zero,
+                    'alpha_capm': alpha_capm,
+                    'beta_capm': beta_capm,
+                    'r2_capm': metrics_capm.get('r_squared'),
+                    'forecast_capm_alpha': forecast_capm_alpha,
+                    'forecast_capm_zero': forecast_capm_zero,
+                    'error_capm_alpha': error_capm_alpha,
+                    'error_capm_zero': error_capm_zero,
+                    # FF3
+                    'alpha_ff3': alpha_ff3,
+                    'beta_mkt_ff3': beta_mkt_ff3,
+                    'beta_smb': beta_smb,
+                    'beta_hml': beta_hml,
+                    'r2_ff3': metrics_ff3.get('r_squared'),
+                    'forecast_ff3_alpha': forecast_ff3_alpha,
+                    'forecast_ff3_zero': forecast_ff3_zero,
+                    'error_ff3_alpha': error_ff3_alpha,
+                    'error_ff3_zero': error_ff3_zero,
+                    'r2_increment': metrics_ff3.get('r_squared') - metrics_capm.get('r_squared'),
                     'actual': actual,
-                    'forecast_alpha': forecast_alpha,
-                    'forecast_zero': forecast_zero,
-                    'error_alpha': error_alpha,
-                    'error_zero': error_zero,
                     'market_cap': sample.get('mean_market_cap', np.nan),
-                    **metrics  # Include model metrics
                 }
-                
+
                 results.append(result)
-                
+
             except Exception as e:
                 if OUTPUT_CONFIG['verbose']:
                     print(f"  Warning: Failed to process sample {i}: {str(e)}")
@@ -377,6 +391,8 @@ def main():
         print(f"Paired t-test:      t={t_stat:.3f}, p={p_val:.4f}")
         # DM > 0 means model with alpha has higher loss; small p-values denote significant accuracy differences
         print(f"Diebold-Mariano:    DM={dm_stat:.3f}, p={dm_pval:.4f}")
+
+        compare_models_performance(results_df)
     
     # === SECTION 6: ADDITIONAL ANALYSES ===
     print("\n" + "="*70)
@@ -453,6 +469,10 @@ def main():
             horizon_results[1]['results_df'],
             alpha_range=PRESENTATION_CONFIG['axis_limits'].get('alpha_range'),
             beta_range=PRESENTATION_CONFIG['axis_limits'].get('beta_range')
+        )
+
+        figures['model_comparison'] = plot_model_comparison(
+            horizon_results[1]['results_df']
         )
     
     # Multi-horizon analysis
