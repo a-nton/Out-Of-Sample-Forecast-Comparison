@@ -1217,18 +1217,21 @@ def compare_models_performance(results_df: pd.DataFrame) -> Dict[str, float]:
 
     Supports DataFrames that either use explicit model-specific error columns
     (e.g. ``error_capm_alpha``) or the generic ``error_alpha``/``error_zero``
-    pair for CAPM. Raises a helpful error if FF3 errors are missing.
+    pair for CAPM. If FF3 error columns are missing, the function returns a
+    CAPM-only comparison instead of raising an exception.
     """
 
     # Determine which columns hold CAPM errors
     capm_alpha_col = 'error_capm_alpha' if 'error_capm_alpha' in results_df.columns else 'error_alpha'
     capm_zero_col = 'error_capm_zero' if 'error_capm_zero' in results_df.columns else 'error_zero'
 
-    # FF3 errors must be present to perform the comparison
+    # If FF3 errors are missing, fall back to CAPM-only comparison
     if 'error_ff3_alpha' not in results_df.columns or 'error_ff3_zero' not in results_df.columns:
-        raise KeyError(
-            "results_df must contain 'error_ff3_alpha' and 'error_ff3_zero' columns to compare against CAPM"
-        )
+        print("\nFF3 errors not found; returning CAPM comparison only.")
+        return {
+            'CAPM with α': calculate_rmse(results_df[capm_alpha_col]),
+            'CAPM no α': calculate_rmse(results_df[capm_zero_col]),
+        }
 
     comparisons = {
         'CAPM with α': calculate_rmse(results_df[capm_alpha_col]),

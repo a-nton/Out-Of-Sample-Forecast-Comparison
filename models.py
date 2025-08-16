@@ -224,10 +224,30 @@ def calculate_vw_beta(results_df: pd.DataFrame) -> Dict[str, any]:
 
 # === SECTION 3: MODEL ESTIMATION WITH VALIDATION ===
 
-def estimate_capm(data: pd.DataFrame, min_obs: int = 200) -> Tuple[float, float, dict]:
+def estimate_capm(data: pd.DataFrame,
+                  min_obs: int = 200,
+                  validate_data: bool = None) -> Tuple[float, float, dict]:
+    """Estimate CAPM model with optional data validation.
+
+    Args:
+        data: Estimation window data containing ``RET``, ``RF`` and ``Mkt-RF``.
+        min_obs: Minimum number of observations required for estimation.
+        validate_data: When ``True`` performs column existence and type checks
+            using :func:`validate_columns`. The default is ``False``.
     """
-    Estimate CAPM model - simplified version.
-    """
+
+    if validate_data is None:
+        validate_data = False
+
+    if validate_data:
+        required = ['RET', 'RF', 'Mkt-RF']
+        validate_columns(
+            data,
+            required,
+            "CAPM",
+            verbose=OUTPUT_CONFIG.get('verbose', False)
+        )
+
     # Prepare data
     y = (data['RET'] - data['RF']).values
     X = data['Mkt-RF'].values.reshape(-1, 1)

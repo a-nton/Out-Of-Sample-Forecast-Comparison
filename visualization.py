@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import pandas as pd
+import warnings
 from typing import Dict, Optional, List
 from scipy import stats
 
@@ -448,7 +449,30 @@ def rescale_axes(fig: plt.Figure,
 # === SECTION 8: MODEL COMPARISON PLOT ===
 
 def plot_model_comparison(results_df: pd.DataFrame) -> plt.Figure:
-    """Create 2x2 comparison plot for CAPM vs FF3."""
+    """Create comparison plot for CAPM and FF3 models.
+
+    Falls back to a CAPM-only plot when FF3 columns are absent.
+    """
+
+    required_ff3 = {
+        'error_ff3_alpha', 'error_ff3_zero', 'r2_ff3',
+        'alpha_ff3', 'beta_mkt_ff3', 'beta_smb', 'beta_hml'
+    }
+    has_ff3 = required_ff3.issubset(results_df.columns)
+
+    if not has_ff3:
+        warnings.warn("FF3 results missing; plotting CAPM metrics only")
+        fig, ax = plt.subplots(figsize=(6, 4))
+        models = ['CAPM+α', 'CAPM']
+        rmses = [
+            calculate_rmse(results_df['error_capm_alpha']),
+            calculate_rmse(results_df['error_capm_zero'])
+        ]
+        ax.bar(models, np.array(rmses) * 100, color=['blue', 'lightblue'])
+        ax.set_ylabel('RMSE (%)')
+        ax.set_title('CAPM Forecast Accuracy')
+        plt.tight_layout()
+        return fig
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 
@@ -487,7 +511,7 @@ def plot_model_comparison(results_df: pd.DataFrame) -> plt.Figure:
         results_df['beta_capm'],
         results_df['beta_mkt_ff3'],
         results_df['beta_smb'],
-        results_df['beta_hml']
+        results_df['beta_hml'],
     ]
     ax4.boxplot(factor_data, labels=['CAPM β', 'FF3 β_MKT', 'β_SMB', 'β_HML'])
     ax4.axhline(0, color='black', linestyle='--', alpha=0.5)
