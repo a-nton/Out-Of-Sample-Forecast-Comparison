@@ -1222,8 +1222,21 @@ def compare_models_performance(results_df: pd.DataFrame) -> Dict[str, float]:
     """
 
     # Determine which columns hold CAPM errors
-    capm_alpha_col = 'error_capm_alpha' if 'error_capm_alpha' in results_df.columns else 'error_alpha'
-    capm_zero_col = 'error_capm_zero' if 'error_capm_zero' in results_df.columns else 'error_zero'
+    capm_alpha_col = (
+        'error_capm_alpha' if 'error_capm_alpha' in results_df.columns
+        else 'error_alpha' if 'error_alpha' in results_df.columns
+        else None
+    )
+    capm_zero_col = (
+        'error_capm_zero' if 'error_capm_zero' in results_df.columns
+        else 'error_zero' if 'error_zero' in results_df.columns
+        else None
+    )
+
+    # If even the CAPM error columns are missing, we cannot compute any comparison
+    if capm_alpha_col is None or capm_zero_col is None:
+        print("\nCAPM errors not found; skipping model comparison.")
+        return {}
 
     # If FF3 errors are missing, fall back to CAPM-only comparison
     if 'error_ff3_alpha' not in results_df.columns or 'error_ff3_zero' not in results_df.columns:
