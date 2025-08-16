@@ -222,7 +222,73 @@ def plot_horizon_analysis(all_results: Dict[int, dict],
     
     if save_path:
         plt.savefig(save_path)
-    
+
+    return fig
+
+
+def plot_annualized_alpha_analysis(horizon_results: Dict[int, dict],
+                                  save_path: Optional[str] = None) -> plt.Figure:
+    """Visualize annualized alpha across horizons and samples."""
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+
+    horizons = sorted(horizon_results.keys())
+
+    ax1 = axes[0, 0]
+    annual_alphas = []
+    for h in horizons:
+        daily_alpha = horizon_results[h]['results_df']['alpha'].mean()
+        annual_alphas.append(daily_alpha * 252 * 100)
+    ax1.bar(horizons, annual_alphas, color='steelblue', alpha=0.7)
+    ax1.axhline(0, color='black', linestyle='--', alpha=0.5)
+    ax1.set_xlabel('Forecast Horizon (days)')
+    ax1.set_ylabel('Annualized Alpha (%)')
+    ax1.set_title('Mean Annualized Alpha by Horizon')
+    ax1.set_xticks(horizons)
+
+    ax2 = axes[0, 1]
+    if 1 in horizon_results:
+        annual_alphas_dist = horizon_results[1]['results_df']['alpha'] * 252 * 100
+        ax2.hist(annual_alphas_dist, bins=30, edgecolor='black', alpha=0.7)
+        ax2.axvline(0, color='red', linestyle='--', label='Zero')
+        ax2.axvline(annual_alphas_dist.mean(), color='green',
+                    label=f'Mean = {annual_alphas_dist.mean():.1f}%')
+        ax2.set_xlabel('Annualized Alpha (%)')
+        ax2.set_ylabel('Frequency')
+        ax2.set_title('Distribution of Annualized Alphas (1-day horizon)')
+        ax2.legend()
+
+    ax3 = axes[1, 0]
+    for h in horizons:
+        results_df = horizon_results[h]['results_df']
+        cumulative_alpha = results_df['alpha'].mean() * h * 100
+        ax3.scatter(h, cumulative_alpha, s=100, label=f'{h}-day')
+    ax3.set_xlabel('Forecast Horizon (days)')
+    ax3.set_ylabel('Cumulative Alpha Effect (%)')
+    ax3.set_title('Cumulative Alpha Impact by Horizon')
+    ax3.legend()
+
+    ax4 = axes[1, 1]
+    sig_props = []
+    for h in horizons:
+        if 'p_alpha' in horizon_results[h]['results_df'].columns:
+            sig_prop = (horizon_results[h]['results_df']['p_alpha'] < 0.05).mean() * 100
+        else:
+            sig_prop = 0
+        sig_props.append(sig_prop)
+    ax4.bar(horizons, sig_props, color='coral', alpha=0.7)
+    ax4.axhline(5, color='red', linestyle='--', alpha=0.5, label='5% (by chance)')
+    ax4.set_xlabel('Forecast Horizon (days)')
+    ax4.set_ylabel('% Significant at 5%')
+    ax4.set_title('Proportion of Significant Alphas')
+    ax4.set_xticks(horizons)
+    ax4.legend()
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path)
+
     return fig
 
 

@@ -69,12 +69,14 @@ from evaluation import (
     calculate_forecast_errors, calculate_rmse, calculate_mae,
     diebold_mariano_test, bootstrap_rmse, analyze_by_characteristic,
     analyze_alpha_subset, calculate_vw_statistics, create_evaluation_report,
-    create_forecast_comparison_table, compare_models_performance
+    create_forecast_comparison_table, compare_models_performance,
+    create_multi_horizon_summary
 )
 from visualization import (
     setup_plot_style, plot_error_comparison, plot_parameter_distributions,
     plot_horizon_analysis, plot_size_analysis, create_summary_table,
-    save_all_figures, adjust_figure_for_presentation, plot_model_comparison
+    save_all_figures, adjust_figure_for_presentation, plot_model_comparison,
+    plot_annualized_alpha_analysis
 )
 
 from scipy import stats
@@ -510,28 +512,73 @@ def main():
     print("SECTION 8: SAVING RESULTS")
     print("="*70)
     
-    # Save detailed results for each horizon
-    for horizon, results in horizon_results.items():
-        results['results_df'].to_csv(
+    # Create evaluation reports for ALL horizons (not just 1-day)
+    for horizon in SAMPLING_CONFIG['forecast_horizons']:
+        if horizon not in horizon_results:
+            continue
+
+        print(f"\nCreating detailed report for {horizon}-day horizon...")
+
+        eval_report = create_evaluation_report(
+            horizon_results[horizon]['results_df'],
+            horizon=horizon,
+            save_path=os.path.join(OUTPUT_CONFIG['results_dir'], f'evaluation_report_h{horizon}.txt')
+        )
+
+        horizon_results[horizon]['results_df'].to_csv(
             os.path.join(OUTPUT_CONFIG['results_dir'], f'results_h{horizon}.csv'),
             index=False
         )
-    
-    # Create and save summary table
+
+        print(f"\n{horizon}-Day Horizon Summary:")
+        print("-" * 40)
+        print(f"RMSE with alpha:    {horizon_results[horizon]['rmse_alpha']*100:.4f}%")
+        print(f"RMSE without alpha: {horizon_results[horizon]['rmse_zero']*100:.4f}%")
+        print(f"Improvement:        {horizon_results[horizon]['rmse_improvement_pct']:.2f}%")
+        print(f"P-value:            {horizon_results[horizon]['p_value']:.4f}")
+
+        if 'alpha' in horizon_results[horizon]['results_df'].columns:
+            daily_alpha = horizon_results[horizon]['results_df']['alpha'].mean()
+            annual_alpha = daily_alpha * 252
+            print(f"Mean daily alpha:   {daily_alpha*100:.4f}%")
+            print(f"Annualized alpha:   {annual_alpha*100:.2f}%")
+
     summary_table = create_forecast_comparison_table(
         results_by_horizon,
         format_type=OUTPUT_CONFIG['table_format']
     )
-    
+
     with open(os.path.join(OUTPUT_CONFIG['results_dir'], 'summary_table.tex'), 'w') as f:
         f.write(summary_table)
-    
-    # Create evaluation report for main horizon
-    eval_report = create_evaluation_report(
-        horizon_results[1]['results_df'],
-        horizon=1,
-        save_path=os.path.join(OUTPUT_CONFIG['results_dir'], 'evaluation_report.txt')
+
+    # Create comprehensive multi-horizon summary
+    multi_horizon_summary = create_multi_horizon_summary(
+        horizon_results,
+        save_path=os.path.join(OUTPUT_CONFIG['results_dir'], 'all_horizons_summary.csv')
     )
+
+    print("\n" + "="*70)
+    print("COMPREHENSIVE MULTI-HORIZON SUMMARY")
+    print("="*70)
+    print(multi_horizon_summary.to_string())
+
+    alpha_fig = plot_annualized_alpha_analysis(
+        horizon_results,
+        save_path=os.path.join(OUTPUT_CONFIG['results_dir'], 'figures', 'annualized_alpha_analysis.pdf')
+    )
+
+    print("\n" + "="*70)
+    print("ANNUALIZED ALPHA SUMMARY")
+    print("="*70)
+    for horizon in sorted(horizon_results.keys()):
+        daily_alpha = horizon_results[horizon]['results_df']['alpha'].mean()
+        annual_simple = daily_alpha * 252
+        annual_compound = (1 + daily_alpha) ** 252 - 1
+
+        print(f"\n{horizon}-Day Horizon:")
+        print(f"  Daily alpha:      {daily_alpha*100:>7.4f}%")
+        print(f"  Annual (simple):  {annual_simple*100:>7.2f}%")
+        print(f"  Annual (compound):{annual_compound*100:>7.2f}%")
     
     # Save configuration for reproducibility
     import json
