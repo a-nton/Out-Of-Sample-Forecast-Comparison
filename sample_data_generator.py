@@ -19,10 +19,6 @@ from data_loader import load_crsp_data, load_ff_factors, prepare_analysis_data
 from sampling import sample_events_value_weighted
 
 
-BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_FULL_CRSP_PATH = BASE_DIR / "data" / "CRSP 1970-2024.parquet"
-DEFAULT_OUTPUT_PATH = BASE_DIR / "data" / "crsp_sample.parquet"
-
 
 def build_subset_from_samples(samples: Dict[int, List[dict]]) -> pd.DataFrame:
     """Compile unique PERMNO-date rows from sampled events.
@@ -49,14 +45,15 @@ def build_subset_from_samples(samples: Dict[int, List[dict]]) -> pd.DataFrame:
 
     subset = pd.concat(frames, ignore_index=True)
     subset = subset.drop_duplicates(subset=["PERMNO", "date"])
-    subset["date"] = pd.to_datetime(subset["date"])
     subset = subset.sort_values(["PERMNO", "date"]).reset_index(drop=True)
     return subset
 
 
 def extract_sample_dataset(
-    full_crsp_path: str = str(DEFAULT_FULL_CRSP_PATH),
-    output_path: str = str(DEFAULT_OUTPUT_PATH),
+
+    full_crsp_path: str,
+    output_path: str = "data/crsp_sample.parquet",
+
     n_samples: int = 105,
     estimation_window: int = SAMPLING_CONFIG["estimation_window"],
     forecast_horizons: List[int] | None = None,
@@ -72,10 +69,11 @@ def extract_sample_dataset(
 
     Parameters
     ----------
-    full_crsp_path : str, optional
-        Path to the full CRSP Parquet file. Defaults to the ``data``
-        directory beside this script.
-    output_path : str, optional
+
+    full_crsp_path : str
+        Path to the full CRSP Parquet file on the user's machine.
+    output_path : str, default ``"data/crsp_sample.parquet"``
+
         Destination for the reduced dataset.
     n_samples : int, default ``105``
         Number of sample windows to draw (includes a buffer above the
@@ -133,23 +131,11 @@ if __name__ == "__main__":  # pragma: no cover
     import argparse
 
     parser = argparse.ArgumentParser(description="Create a small CRSP sample dataset.")
-    parser.add_argument(
-        "full_crsp_path",
-        nargs="?",
-        default=str(DEFAULT_FULL_CRSP_PATH),
-        help="Path to the full CRSP Parquet file",
-    )
-    parser.add_argument(
-        "--output",
-        default=str(DEFAULT_OUTPUT_PATH),
-        help="Output path",
-    )
-    parser.add_argument(
-        "--n-samples",
-        type=int,
-        default=105,
-        help="Number of sample windows to draw",
-    )
+
+    parser.add_argument("full_crsp_path", help="Path to the full CRSP Parquet file")
+    parser.add_argument("--output", default="data/crsp_sample.parquet", help="Output path")
+    parser.add_argument("--n-samples", type=int, default=105, help="Number of sample windows to draw")
+
     args = parser.parse_args()
 
     extract_sample_dataset(
