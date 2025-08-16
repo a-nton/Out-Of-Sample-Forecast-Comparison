@@ -10,128 +10,53 @@ from typing import Tuple, Optional, Dict
 import numpy as np
 import pandas as pd
 
-from config import DATA_PATHS, DATA_FILTERS, MODEL_CONFIG, PRESENTATION_CONFIG
+from config import DATA_PATHS, DATA_FILTERS, MODEL_CONFIG
 logger = logging.getLogger(__name__)
 
 # === SECTION 1: DATA LOADING FUNCTIONS ===
 
 def load_crsp_data(filepath: str = None) -> pd.DataFrame:
-    """Load CRSP data from parquet file with validation."""
+    """Load and clean CRSP data."""
     if filepath is None:
         filepath = DATA_PATHS['crsp_file']
 
-    logger.info("Loading CRSP data from %s", filepath)
-
-    try:
-        # Use fastparquet engine to avoid pyarrow extension issues in minimal setups
-        df = pd.read_parquet(filepath, engine="fastparquet")
-    except FileNotFoundError as exc:
-        raise FileNotFoundError(f"CRSP data file not found: {filepath}") from exc
-    except Exception as exc:  # pragma: no cover - unexpected read errors
-        raise Exception(f"Error loading CRSP data: {str(exc)}") from exc
-
-    # Standardize column names (ensure uppercase)
+    # Load data
+    df = pd.read_parquet(filepath, engine="fastparquet")
     df.columns = df.columns.str.upper()
 
-    # Required columns
-    required_cols = ['PERMNO', 'DATE', 'SHRCD', 'EXCHCD', 'PRC', 'RET', 'SHROUT']
-    missing_cols = [col for col in required_cols if col not in df.columns]
-    if missing_cols:
-        raise ValueError(f"Missing required CRSP columns: {missing_cols}")
-
-    # Standardize datatypes
-    logger.debug("Standardizing data types")
+    # Standardize
     df['DATE'] = pd.to_datetime(df['DATE'])
     df['PERMNO'] = df['PERMNO'].astype(int)
 
-    # Numeric columns - handle CRSP-specific issues
-    numeric_cols = ['PRC', 'RET', 'SHROUT', 'VWRETD', 'SPRTRN']
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-
-    # Handle CRSP-specific data issues
-    # PRC < 0 indicates bid-ask average
+    # Handle CRSP conventions
     df['ABS_PRC'] = df['PRC'].abs()
-
-    # RET = -66.0 to -99.0 are CRSP missing codes
     df.loc[df['RET'] <= -66.0, 'RET'] = np.nan
 
-    # Winsorize returns before applying filters
-    if MODEL_CONFIG.get('winsorize_returns', True):
-        level = MODEL_CONFIG.get('winsorize_level', 0.005)
+    # ALWAYS winsorize at 0.5%
+    level = MODEL_CONFIG['winsorize_level']
+    ret_notna = df['RET'].notna()
+    if ret_notna.sum() > 0:
+        lower = df.loc[ret_notna, 'RET'].quantile(level)
+        upper = df.loc[ret_notna, 'RET'].quantile(1 - level)
+        df['RET'] = df['RET'].clip(lower=lower, upper=upper)
 
-        # Store original returns for diagnostics
-        df['RET_original'] = df['RET'].copy()
+    # Apply standard filters
+    df = df[df['SHRCD'].isin(DATA_FILTERS['shrcd_codes'])]
+    df = df[df['EXCHCD'].isin(DATA_FILTERS['exchcd_codes'])]
+    df = df[df['ABS_PRC'] >= DATA_FILTERS['min_price']]
+    df = df[(df['DATE'] >= pd.to_datetime(DATA_FILTERS['start_date'])) & 
+            (df['DATE'] <= pd.to_datetime(DATA_FILTERS['end_date']))]
 
-        ret_notna = df['RET'].notna()
-        if ret_notna.sum() > 0:
-            lower = df.loc[ret_notna, 'RET'].quantile(level)
-            upper = df.loc[ret_notna, 'RET'].quantile(1 - level)
+    # Calculate market cap
+    df['market_cap'] = df['ABS_PRC'] * df['SHROUT'] / 1000  # In millions
+    df = df[df['market_cap'] >= DATA_FILTERS['min_market_cap']]
 
-            n_lower = (df['RET'] < lower).sum()
-            n_upper = (df['RET'] > upper).sum()
-
-            df.loc[df['RET'] < lower, 'RET'] = lower
-            df.loc[df['RET'] > upper, 'RET'] = upper
-
-            logger.info(
-                f"Winsorized {n_lower} returns below {lower:.4f} ({level*100}%ile)"
-            )
-            logger.info(
-                f"Winsorized {n_upper} returns above {upper:.4f} ({(1 - level)*100}%ile)"
-            )
-
-            affected = n_lower + n_upper
-            total = ret_notna.sum()
-            logger.info(
-                f"Total affected: {affected}/{total} ({affected/total*100:.2f}%)"
-            )
-
-    # Convert RET to percentage if needed (CRSP usually provides as decimal)
-    # Check if returns are likely in decimal format (small values)
-    ret_mean = df['RET'].dropna().mean()
-    if abs(ret_mean) < 0.01:  # Likely in decimal format
-        logger.debug("Returns appear to be in decimal format (as expected)")
-    else:
-        logger.warning("Returns may not be in decimal format. Mean return = %s", ret_mean)
-
-    # Apply filters if specified
-    initial_obs = len(df)
-    initial_stocks = df['PERMNO'].nunique()
-
-    # Date filter
-    if 'start_date' in DATA_FILTERS and 'end_date' in DATA_FILTERS:
-        start_date = pd.to_datetime(DATA_FILTERS['start_date'])
-        end_date = pd.to_datetime(DATA_FILTERS['end_date'])
-        df = df[(df['DATE'] >= start_date) & (df['DATE'] <= end_date)]
-
-    # Share code filter (common stocks)
-    if 'shrcd_codes' in DATA_FILTERS:
-        df = df[df['SHRCD'].isin(DATA_FILTERS['shrcd_codes'])]
-
-    # Exchange filter
-    if 'exchcd_codes' in DATA_FILTERS:
-        df = df[df['EXCHCD'].isin(DATA_FILTERS['exchcd_codes'])]
-
-    # Price filter (penny stocks)
-    if 'min_price' in DATA_FILTERS:
-        df = df[df['ABS_PRC'] >= DATA_FILTERS['min_price']]
-
-    # Basic data quality filters
-    df = df[df['SHROUT'] > 0]  # Must have shares outstanding
-    df = df[df['RET'].notna()]  # Must have return data
-
-    # Rename DATE to date for consistency
+    # Clean up
+    df = df[df['SHROUT'] > 0]
+    df = df[df['RET'].notna()]
     df = df.rename(columns={'DATE': 'date'})
 
-    logger.info(
-        "Loaded %s observations for %s stocks", f"{len(df):,}", f"{df['PERMNO'].nunique():,}"
-    )
-    logger.debug("Date range: %s to %s", df['date'].min(), df['date'].max())
-    logger.debug(
-        "Filtered from %s observations and %s stocks", f"{initial_obs:,}", f"{initial_stocks:,}"
-    )
+    print(f"Loaded {len(df):,} observations for {df['PERMNO'].nunique():,} stocks")
 
     return df
 

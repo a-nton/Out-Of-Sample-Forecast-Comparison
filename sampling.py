@@ -156,17 +156,7 @@ def validate_estimation_window(data: pd.DataFrame, config: dict) -> Tuple[bool, 
         if 'market_cap' in data.columns:
             if (data['market_cap'] < config['min_market_cap']).any():
                 return False, "low_market_cap"
-    
-    # Additional data quality checks if enabled
-    if MODEL_CONFIG.get('validate_estimations', True):
-        # Check for suspicious return patterns
-        returns = data['RET'].dropna()
-        if len(returns) > 10:
-            # Check for too many zero returns
-            zero_return_pct = (returns == 0).sum() / len(returns)
-            if zero_return_pct > 0.5:
-                return False, "excessive_zero_returns"
-    
+
     return True, ""
 
 
@@ -569,58 +559,54 @@ def sample_events_value_weighted(merged_data: pd.DataFrame,
 
 def analyze_sample_characteristics(samples: Dict[int, List[dict]]) -> pd.DataFrame:
     """
-    Analyze characteristics of the collected samples.
-    
-    Args:
-        samples: Dictionary mapping horizon to list of samples
-    
-    Returns:
-        DataFrame with sample characteristics summary
+    Analyze characteristics of the collected samples - ONCE, not per horizon.
+    Focus on what actually varies: the stocks and time periods selected.
     """
-    all_characteristics = []
-    
-    for horizon, horizon_samples in samples.items():
-        if not horizon_samples:
-            continue
-            
-        chars = {
-            'horizon': horizon,
-            'n_samples': len(horizon_samples),
-            'n_unique_stocks': len(set(s['permno'] for s in horizon_samples)),
-            'avg_obs_per_window': np.mean([s['n_obs'] for s in horizon_samples]),
-            'avg_returns_per_window': np.mean([s['n_returns'] for s in horizon_samples]),
-            'pct_missing_returns': np.mean([
-                (s['n_obs'] - s['n_returns']) / s['n_obs'] * 100 
-                for s in horizon_samples
-            ]),
-        }
-        
-        # Market cap statistics
-        market_caps = [s['mean_market_cap'] for s in horizon_samples if s['mean_market_cap'] is not None]
-        if market_caps:
-            chars['avg_market_cap'] = np.mean(market_caps)
-            chars['median_market_cap'] = np.median(market_caps)
-            chars['p10_market_cap'] = np.percentile(market_caps, 10)
-            chars['p90_market_cap'] = np.percentile(market_caps, 90)
-        
-        # Date coverage
-        all_dates = []
-        for s in horizon_samples:
-            all_dates.extend([s['estimation_start'], s['estimation_end'], s['forecast_date']])
-        all_dates = pd.to_datetime(all_dates)
-        
-        chars['earliest_date'] = all_dates.min()
-        chars['latest_date'] = all_dates.max()
-        chars['date_span_years'] = (all_dates.max() - all_dates.min()).days / 365.25
-        
-        # Forecast horizon validation
-        trading_days = [s['trading_days'] for s in horizon_samples]
-        chars['mean_trading_days'] = np.mean(trading_days)
-        chars['std_trading_days'] = np.std(trading_days)
-        
-        all_characteristics.append(chars)
-    
-    return pd.DataFrame(all_characteristics)
+    # Use first horizon since estimation windows are identical
+    first_horizon = min(samples.keys())
+    sample_list = samples[first_horizon]
+
+    if not sample_list:
+        return pd.DataFrame()
+
+    # Analyze the actual sampling distribution
+    characteristics = {
+        'n_samples': len(sample_list),
+        'n_unique_stocks': len(set(s['permno'] for s in sample_list)),
+        'samples_per_stock': len(sample_list) / len(set(s['permno'] for s in sample_list)),
+
+        # Time distribution
+        'earliest_date': min(s['estimation_start'] for s in sample_list),
+        'latest_date': max(s['estimation_end'] for s in sample_list),
+        'span_years': (max(s['estimation_end'] for s in sample_list) - 
+                      min(s['estimation_start'] for s in sample_list)).days / 365.25,
+
+        # Market cap distribution (if available)
+        'mean_market_cap': np.mean([s['mean_market_cap'] for s in sample_list 
+                                   if s['mean_market_cap'] is not None]),
+        'median_market_cap': np.median([s['mean_market_cap'] for s in sample_list 
+                                       if s['mean_market_cap'] is not None]),
+        'min_market_cap': np.min([s['mean_market_cap'] for s in sample_list 
+                                 if s['mean_market_cap'] is not None]),
+        'max_market_cap': np.max([s['mean_market_cap'] for s in sample_list 
+                                 if s['mean_market_cap'] is not None]),
+
+        # Data quality
+        'mean_observations': np.mean([s['n_obs'] for s in sample_list]),
+        'mean_returns': np.mean([s['n_returns'] for s in sample_list]),
+        'mean_missing_pct': np.mean([(s['n_obs'] - s['n_returns']) / s['n_obs'] * 100 
+                                    for s in sample_list]),
+    }
+
+    # Add decade distribution
+    decades = pd.Series([s['estimation_end'].year // 10 * 10 for s in sample_list])
+    decade_counts = decades.value_counts().sort_index()
+
+    print("\nSampling Distribution by Decade:")
+    for decade, count in decade_counts.items():
+        print(f"  {decade}s: {count} samples ({count/len(sample_list)*100:.1f}%)")
+
+    return pd.DataFrame([characteristics])
 
 
 def validate_sampling_randomness(samples: Dict[int, List[dict]]) -> Dict[str, any]:
