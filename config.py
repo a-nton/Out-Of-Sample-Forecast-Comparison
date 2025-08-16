@@ -22,17 +22,17 @@ DATA_FILTERS = {
     'exchcd_codes': [1, 2, 3],           # NYSE, AMEX, NASDAQ
     'start_date': '1970-01-02',          # Sample start
     'end_date': '2024-12-31',            # Sample end
-    'max_return': 0.5,                   # Maximum daily return (50%)
-    'min_market_cap': 0,                 # Minimum market cap in millions (0 = no filter)
+    'min_market_cap': 100,               # Minimum market cap in millions
 }
 
 # === SECTION 3: MODEL SPECIFICATIONS ===
 MODEL_CONFIG = {
     'base_model': 'capm',                # 'capm' or 'ff3' or 'ff5'
     'include_alpha': [True, False],      # Compare with and without intercept
-    'winsorize_returns': False,          # Option for robustness
-    'winsorize_level': 0.001,            # 0.1% winsorization if enabled
-    'validate_estimations': True,        # Run diagnostic checks on each estimation
+    'winsorize_returns': True,           # Enable return winsorization
+    'winsorize_level': 0.005,            # 0.5% winsorization in each tail
+    'validate_estimations': False,       # Skip diagnostic checks unless needed
+    'diagnose_models': False,            # Disable model diagnostics by default
 }
 
 # === SECTION 4: ANALYSIS OPTIONS ===

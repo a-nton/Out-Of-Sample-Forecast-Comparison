@@ -135,11 +135,6 @@ def validate_estimation_window(data: pd.DataFrame, config: dict) -> Tuple[bool, 
         if (data['abs_prc'] < config['min_price']).any():
             return False, "penny_stock"
     
-    # Check for extreme returns
-    if 'max_return' in config:
-        if (data['RET'].abs() > config['max_return']).any():
-            return False, "extreme_returns"
-    
     # Check for too many consecutive missing returns
     if data['RET'].isna().any():
         # Find maximum consecutive NaN values
