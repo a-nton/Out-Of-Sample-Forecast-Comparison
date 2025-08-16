@@ -5,7 +5,9 @@ Run this script directly to view information about the CRSP and Fama-French data
 import os
 from pathlib import Path
 import pandas as pd
+
 from config import DATA_PATHS
+from data_loader import load_ff_factors
 
 # Ensure working directory is repository root
 BASE_DIR = Path(__file__).resolve().parent
@@ -32,7 +34,7 @@ def main() -> None:
         print(f"CRSP data file not found: {DATA_PATHS['crsp_file']}")
 
     try:
-        ff_df = pd.read_csv(DATA_PATHS['ff_factors'], skiprows=3)
+        ff_df = load_ff_factors(DATA_PATHS['ff_factors'])
         _inspect_dataframe(ff_df, "Fama-French factors")
     except FileNotFoundError:
         print(f"Fama-French factors file not found: {DATA_PATHS['ff_factors']}")
