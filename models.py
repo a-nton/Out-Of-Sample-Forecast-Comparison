@@ -430,18 +430,41 @@ def estimate_ff3(data: pd.DataFrame,
 
 # === SECTION 4: FORECAST GENERATION ===
 
-def forecast_capm_return(alpha: float, beta: float, mkt_excess: float, 
-                        rf: float, use_alpha: bool = True) -> float:
+def forecast_capm_return_multiperiod(alpha: float, beta: float,
+                                    mkt_excess: float, rf: float,
+                                    horizon: int = 1,
+                                    use_alpha: bool = True) -> float:
     """
-    Generate return forecast using CAPM.
-    
+    Generate return forecast using CAPM for multi-day horizons.
+
+    Args:
+        alpha: DAILY alpha from estimation
+        beta: Market beta
+        mkt_excess: CUMULATIVE market excess return over the horizon period
+        rf: CUMULATIVE risk-free rate over the horizon period
+        horizon: Number of trading days in forecast horizon
+        use_alpha: Whether to include alpha
+
     Returns:
-        Forecasted return (in same units as input)
+        Forecasted CUMULATIVE return over the horizon
     """
-    if use_alpha:
-        return alpha + beta * mkt_excess + rf
+    if horizon == 1:
+        # Simple 1-day forecast
+        if use_alpha:
+            return alpha + beta * mkt_excess + rf
+        else:
+            return beta * mkt_excess + rf
     else:
-        return beta * mkt_excess + rf
+        # Multi-day forecast
+        if use_alpha:
+            # Method 1: Simple linear scaling (approximation)
+            return horizon * alpha + beta * mkt_excess + rf
+
+            # Method 2: Compounding (more accurate)
+            # daily_mkt = mkt_excess / horizon  # Approximate daily
+            # return (1 + alpha + beta * daily_mkt) ** horizon - 1 + rf
+        else:
+            return beta * mkt_excess + rf
 
 
 def forecast_ff3_return(coefficients: np.ndarray, factors: dict, 
