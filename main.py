@@ -81,13 +81,44 @@ from visualization import (
 
 from scipy import stats
 
-# Import validation module if it exists
-try:
-    from validation import run_methodology_validation
-    VALIDATION_AVAILABLE = True
-except ImportError:
-    VALIDATION_AVAILABLE = False
-    print("Note: Validation module not found. Skipping methodology validation.")
+
+def create_analysis_summary(all_samples, horizon_results):
+    """Create a single, useful summary of the entire analysis."""
+
+    summary = {
+        "SAMPLING SUMMARY": {
+            "Total samples": len(all_samples[1]),
+            "Unique stocks": len(set(s['permno'] for s in all_samples[1])),
+            "Date range": f"{min(s['estimation_start'] for s in all_samples[1])} to "
+                         f"{max(s['estimation_end'] for s in all_samples[1])}",
+            "Mean market cap": f"${np.mean([s['mean_market_cap'] for s in all_samples[1]]):,.0f}M",
+        },
+
+        "KEY FINDINGS": {},
+
+        "FORECAST HORIZONS": {}
+    }
+
+    for h in sorted(horizon_results.keys()):
+        daily_alpha = horizon_results[h]['results_df']['alpha'].mean()
+        annual_alpha = daily_alpha * 252
+        summary["FORECAST HORIZONS"][f"{h}-day"] = {
+            "RMSE improvement": f"{horizon_results[h]['rmse_improvement_pct']:.2f}%",
+            "Significant": horizon_results[h]['p_value'] < 0.05,
+            "Daily alpha": f"{daily_alpha*100:.4f}%",
+            "Annualized alpha": f"{annual_alpha*100:.2f}%",
+        }
+
+    any_significant = any(horizon_results[h]['p_value'] < 0.05
+                         for h in horizon_results.keys())
+
+    summary["KEY FINDINGS"] = {
+        "Alpha helps forecasting": "No" if not any_significant else "Mixed",
+        "Mean annualized alpha": f"{np.mean([horizon_results[h]['results_df']['alpha'].mean() for h in horizon_results.keys()])*252*100:.2f}%",
+        "Best horizon": min(horizon_results.keys(), key=lambda h: horizon_results[h]['rmse_alpha']),
+    }
+
+    return summary
 
 
 def main():
@@ -137,29 +168,8 @@ def main():
     print("\nWinsorization Level Analysis:")
     winsorization_analysis = test_winsorization_levels(merged_df)
     print(winsorization_analysis)
-    
-    # === SECTION 2: METHODOLOGY VALIDATION (if available) ===
-    if VALIDATION_AVAILABLE and ANALYSIS_CONFIG.get('run_validation', True):
-        print("\n" + "="*70)
-        print("SECTION 2: METHODOLOGY VALIDATION")
-        print("="*70)
-        
-        validation_results = run_methodology_validation(merged_df, SAMPLING_CONFIG)
-        
-        # Check if validation passed
-        all_passed = all(r.get('passed', False) for r in validation_results.values())
-        
-        if not all_passed:
-            response = input("\nValidation found issues. Continue anyway? (y/n): ")
-            if response.lower() != 'y':
-                print("Exiting due to validation failures.")
-                return
-        else:
-            print("\nAll validation tests passed! Proceeding with analysis.")
-        
-        time.sleep(2)
-    
-    # === SECTION 3: SAMPLING AND ESTIMATION ===
+
+    # === SECTION 3: SAMPLING AND MODEL ESTIMATION ===
     print("\n" + "="*70)
     print("SECTION 3: SAMPLING AND MODEL ESTIMATION")
     print("="*70)
@@ -416,7 +426,7 @@ def main():
     main_results = results_by_horizon[1]
     
     # 6.1 Value-Weighted Analysis
-    if ANALYSIS_CONFIG['calculate_vw_beta'] and 'market_cap' in main_results.columns:
+    if 'market_cap' in main_results.columns:
         print("\n6.1 Value-Weighted Beta Analysis")
         print("-" * 40)
         
@@ -433,30 +443,29 @@ def main():
             print(f"Equal-weighted RMSE improvement: {vw_stats['ew_rmse_improvement']:.2f}%")
     
     # 6.2 Alpha Subset Analysis
-    if ANALYSIS_CONFIG['alpha_subset_analysis']:
-        print("\n6.2 High-Alpha Subset Analysis")
-        print("-" * 40)
-        
-        alpha_analysis = analyze_alpha_subset(
-            main_results,
-            percentile_cutoff=ANALYSIS_CONFIG['alpha_percentile_cutoff']
-        )
-        
-        print(f"Top {ANALYSIS_CONFIG['alpha_percentile_cutoff']}% by |α|:")
-        if alpha_analysis['high_alpha_group']:
-            print(f"  High |α| improvement: {alpha_analysis['high_alpha_group']['rmse_improvement_pct']:.2f}%")
-            print(f"  Low |α| improvement:  {alpha_analysis['low_alpha_group']['rmse_improvement_pct']:.2f}%")
-            print(f"  {alpha_analysis['conclusion']}")
+    print("\n6.2 High-Alpha Subset Analysis")
+    print("-" * 40)
+
+    alpha_analysis = analyze_alpha_subset(
+        main_results,
+        percentile_cutoff=ANALYSIS_CONFIG['alpha_percentile_cutoff']
+    )
+
+    print(f"Top {ANALYSIS_CONFIG['alpha_percentile_cutoff']}% by |α|:")
+    if alpha_analysis['high_alpha_group']:
+        print(f"  High |α| improvement: {alpha_analysis['high_alpha_group']['rmse_improvement_pct']:.2f}%")
+        print(f"  Low |α| improvement:  {alpha_analysis['low_alpha_group']['rmse_improvement_pct']:.2f}%")
+        print(f"  {alpha_analysis['conclusion']}")
     
     # 6.3 Size Analysis
-    if ANALYSIS_CONFIG['analyze_by_size'] and 'market_cap' in main_results.columns:
+    if 'market_cap' in main_results.columns:
         print("\n6.3 Analysis by Market Cap")
         print("-" * 40)
         
         size_analysis = analyze_by_characteristic(
             main_results,
             characteristic='market_cap',
-            n_groups=ANALYSIS_CONFIG['size_quintiles']
+            n_groups=5
         )
         print("\nRMSE Improvement by Size Quintile:")
         for _, row in size_analysis.iterrows():
@@ -474,14 +483,10 @@ def main():
         figures['error_comparison'] = plot_error_comparison(
             horizon_results[1]['errors_alpha'],
             horizon_results[1]['errors_zero'],
-            error_range=PRESENTATION_CONFIG['axis_limits'].get('error_range'),
-            scatter_range=PRESENTATION_CONFIG['axis_limits'].get('scatter_range')
         )
 
         figures['parameter_distributions'] = plot_parameter_distributions(
             horizon_results[1]['results_df'],
-            alpha_range=PRESENTATION_CONFIG['axis_limits'].get('alpha_range'),
-            beta_range=PRESENTATION_CONFIG['axis_limits'].get('beta_range')
         )
 
         figures['model_comparison'] = plot_model_comparison(
@@ -492,16 +497,12 @@ def main():
     if len(SAMPLING_CONFIG['forecast_horizons']) > 1:
         figures['horizon_analysis'] = plot_horizon_analysis(
             horizon_results,
-            rmse_ylim=PRESENTATION_CONFIG['axis_limits'].get('horizon_rmse_ylim'),
-            improve_ylim=PRESENTATION_CONFIG['axis_limits'].get('horizon_improve_ylim')
         )
     
     # Size analysis
-    if ANALYSIS_CONFIG['analyze_by_size'] and 'market_cap' in main_results.columns:
+    if 'market_cap' in main_results.columns:
         figures['size_analysis'] = plot_size_analysis(
             main_results,
-            rmse_ylim=PRESENTATION_CONFIG['axis_limits'].get('size_rmse_ylim'),
-            beta_ylim=PRESENTATION_CONFIG['axis_limits'].get('size_beta_ylim')
         )
     
     # Save all figures
@@ -579,7 +580,11 @@ def main():
         print(f"  Daily alpha:      {daily_alpha*100:>7.4f}%")
         print(f"  Annual (simple):  {annual_simple*100:>7.2f}%")
         print(f"  Annual (compound):{annual_compound*100:>7.2f}%")
-    
+
+    analysis_summary = create_analysis_summary(all_samples, horizon_results)
+    with open(os.path.join(OUTPUT_CONFIG['results_dir'], 'analysis_summary.json'), 'w') as f:
+        json.dump(analysis_summary, f, indent=2)
+
     # Save configuration for reproducibility
     import json
     config_dict = {

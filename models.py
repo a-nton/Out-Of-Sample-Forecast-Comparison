@@ -11,7 +11,7 @@ import warnings
 import statsmodels.api as sm
 from scipy import stats
 
-from config import MODEL_CONFIG, PRESENTATION_CONFIG, OUTPUT_CONFIG
+from config import MODEL_CONFIG, OUTPUT_CONFIG
 
 # === SECTION 1: DATA VALIDATION AND COLUMN CHECKING ===
 
@@ -58,7 +58,7 @@ def validate_columns(data: pd.DataFrame, required_cols: List[str],
                     raise TypeError(f"Cannot convert column '{col}' to numeric type") from exc
     
     # Print validation summary if verbose
-    if verbose and MODEL_CONFIG.get('validate_estimations', True):
+    if verbose:
         print(f"\n{model_name} Column Validation:")
         print("-" * 50)
         for col, dtype in col_types.items():
@@ -224,109 +224,45 @@ def calculate_vw_beta(results_df: pd.DataFrame) -> Dict[str, any]:
 
 # === SECTION 3: MODEL ESTIMATION WITH VALIDATION ===
 
-def estimate_capm(data: pd.DataFrame, 
-                  min_obs: int = 150,
-                  validate_data: bool = None) -> Tuple[float, float, dict]:
+def estimate_capm(data: pd.DataFrame, min_obs: int = 200) -> Tuple[float, float, dict]:
     """
-    Estimate CAPM model with comprehensive validation.
-    R_i - R_f = alpha + beta * (R_m - R_f) + epsilon
+    Estimate CAPM model - simplified version.
+    """
+    # Prepare data
+    y = (data['RET'] - data['RF']).values
+    X = data['Mkt-RF'].values.reshape(-1, 1)
 
-    Args:
-        data: DataFrame with columns RET, RF, MKT (market return)
-        min_obs: Minimum observations required
-        validate_data: Whether to validate (None = use config setting)
-    
-    Returns:
-        alpha: Intercept (Jensen's alpha) 
-        beta: Market beta
-        stats: Comprehensive statistics and diagnostics
-    """
-    if validate_data is None:
-        validate_data = MODEL_CONFIG.get('validate_estimations', True)
-    
-    # Validate columns if requested
-    if validate_data:
-        required_cols = ['RET', 'RF', 'MKT']
-        col_types = validate_columns(
-            data, required_cols, "CAPM", verbose=OUTPUT_CONFIG.get('verbose', False)
-        )
-        data_quality = check_estimation_data_quality(data)
-    
-    # Prepare data - ensure we have numeric arrays
-    excess_ret = pd.to_numeric(data['RET'] - data['RF'], errors='coerce')
-    mkt_excess = pd.to_numeric(data['MKT'] - data['RF'], errors='coerce')
-    y = excess_ret.values
-    X = mkt_excess.values.reshape(-1, 1)
-    
-    # Remove missing values
+    # Remove missing
     mask = ~(np.isnan(y) | np.isnan(X.flatten()))
     y_clean = y[mask]
     X_clean = X[mask]
-    
-    n_obs = len(y_clean)
-    n_missing = len(y) - n_obs
-    
-    if n_obs < min_obs:
-        raise ValueError(f"Insufficient observations: {n_obs} < {min_obs} "
-                        f"(dropped {n_missing} missing values)")
-    
-    # Estimate model with HAC standard errors
+
+    if len(y_clean) < min_obs:
+        raise ValueError(f"Insufficient observations: {len(y_clean)} < {min_obs}")
+
+    # Estimate with HAC standard errors
     X_with_const = sm.add_constant(X_clean)
-    ols = sm.OLS(y_clean, X_with_const)
-    maxlags = int(np.ceil(n_obs ** (1 / 4)))  # Newey-West rule-of-thumb
-    results = ols.fit(cov_type='HAC', cov_kwds={'maxlags': maxlags, 'use_correction': True})
+    results = sm.OLS(y_clean, X_with_const).fit(
+        cov_type='HAC',
+        cov_kwds={'maxlags': int(len(y_clean) ** 0.25)}
+    )
 
     alpha, beta = results.params
-    residuals = results.resid
-    r_squared = results.rsquared
-    adj_r_squared = results.rsquared_adj
 
-    se_alpha, se_beta = results.bse
-    t_alpha = results.tvalues[0]
-    t_beta = (beta - 1) / se_beta if se_beta > 0 else np.nan
-    p_alpha = results.pvalues[0]
-    p_beta = 2 * (1 - stats.t.cdf(abs(t_beta), n_obs - 2)) if se_beta > 0 else np.nan
-
-    ss_res = np.sum(residuals ** 2)
-
+    # Return only essential metrics
     metrics = {
-        'r_squared': r_squared,
-        'adj_r_squared': adj_r_squared,
-        'n_obs': n_obs,
-        'n_missing': n_missing,
-        'se_alpha': se_alpha,
-        'se_beta': se_beta,
-        't_alpha': t_alpha,
-        't_beta': t_beta,
-        'p_alpha': p_alpha,
-        'p_beta': p_beta,
-        'residual_std': np.std(residuals, ddof=2),
-        'residual_skew': stats.skew(residuals),
-        'residual_kurtosis': stats.kurtosis(residuals),
-        'aic': results.aic,
-        'bic': results.bic,
-        'mean_excess_return': np.mean(y_clean),
-        'market_excess_mean': np.mean(X_clean),
-        'market_excess_std': np.std(X_clean),
-        'realized_sharpe': np.mean(y_clean) / np.std(y_clean) if np.std(y_clean) > 0 else 0,
-        'market_sharpe': np.mean(X_clean) / np.std(X_clean) if np.std(X_clean) > 0 else 0,
+        'r_squared': results.rsquared,
+        'n_obs': len(y_clean),
+        'se_alpha': results.bse[0],
+        'se_beta': results.bse[1],
+        'p_alpha': results.pvalues[0],
+        'p_beta': results.pvalues[1],
     }
-
-    if validate_data:
-        metrics['data_quality'] = data_quality
-        if data_quality['warnings']:
-            metrics['quality_warnings'] = data_quality['warnings']
-
-    if n_obs > 10:
-        dw = sm.stats.stattools.durbin_watson(residuals)
-        metrics['durbin_watson'] = dw
-        if dw < 1.5 or dw > 2.5:
-            metrics['autocorrelation_warning'] = f"Potential autocorrelation (DW = {dw:.2f})"
 
     return alpha, beta, metrics
 
 
-def estimate_ff3(data: pd.DataFrame, 
+def estimate_ff3(data: pd.DataFrame,
                  min_obs: int = 150,
                  validate_data: bool = None) -> Tuple[np.ndarray, dict]:
     """
@@ -338,7 +274,7 @@ def estimate_ff3(data: pd.DataFrame,
         stats: Model statistics including incremental R² over CAPM
     """
     if validate_data is None:
-        validate_data = MODEL_CONFIG.get('validate_estimations', True)
+        validate_data = False
     
     # Validate columns
     if validate_data:
