@@ -19,6 +19,7 @@ from data_loader import load_crsp_data, load_ff_factors, prepare_analysis_data
 from sampling import sample_events_value_weighted
 
 
+
 def build_subset_from_samples(samples: Dict[int, List[dict]]) -> pd.DataFrame:
     """Compile unique PERMNO-date rows from sampled events.
 
@@ -49,8 +50,10 @@ def build_subset_from_samples(samples: Dict[int, List[dict]]) -> pd.DataFrame:
 
 
 def extract_sample_dataset(
+
     full_crsp_path: str,
     output_path: str = "data/crsp_sample.parquet",
+
     n_samples: int = 105,
     estimation_window: int = SAMPLING_CONFIG["estimation_window"],
     forecast_horizons: List[int] | None = None,
@@ -66,9 +69,11 @@ def extract_sample_dataset(
 
     Parameters
     ----------
+
     full_crsp_path : str
         Path to the full CRSP Parquet file on the user's machine.
     output_path : str, default ``"data/crsp_sample.parquet"``
+
         Destination for the reduced dataset.
     n_samples : int, default ``105``
         Number of sample windows to draw (includes a buffer above the
@@ -126,9 +131,11 @@ if __name__ == "__main__":  # pragma: no cover
     import argparse
 
     parser = argparse.ArgumentParser(description="Create a small CRSP sample dataset.")
+
     parser.add_argument("full_crsp_path", help="Path to the full CRSP Parquet file")
     parser.add_argument("--output", default="data/crsp_sample.parquet", help="Output path")
     parser.add_argument("--n-samples", type=int, default=105, help="Number of sample windows to draw")
+
     args = parser.parse_args()
 
     extract_sample_dataset(
