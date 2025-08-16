@@ -1,8 +1,7 @@
-"""
-config.py - Simplified configuration for event study analysis.
-"""
+"""Simplified configuration and formatting utilities for the analysis."""
 
 import os
+import numpy as np
 
 # === CORE PARAMETERS ===
 SAMPLING_CONFIG = {
@@ -25,8 +24,8 @@ DATA_FILTERS = {
 }
 
 # === MODEL SETTINGS ===
+# Always compare CAPM with FF3; no need to specify a base model
 MODEL_CONFIG = {
-    'base_model': 'capm',                # 'capm' or 'ff3'
     'winsorize_level': 0.005,            # 0.5% in each tail
 }
 
@@ -43,6 +42,15 @@ OUTPUT_CONFIG = {
     'figure_dpi': 300,
     'table_format': 'latex',
     'verbose': True,
+}
+
+# === PRESENTATION SETTINGS ===
+# Store captions and notes by table/figure name for flexibility
+PRESENTATION_CONFIG = {
+    'forecast_comparison_table': {
+        'caption': 'Forecast accuracy comparison: CAPM vs FF3',
+        'notes': 'RMSE reported in percentage points. Lower is better.',
+    }
 }
 
 # === FILE PATHS ===
@@ -78,6 +86,39 @@ def create_output_dirs():
     ]
     for dir_path in dirs_to_create:
         os.makedirs(dir_path, exist_ok=True)
+
+
+# === FORMATTING UTILITIES ===
+
+def format_percentage(value: float, decimals: int = 2) -> str:
+    """Format a decimal value as a percentage string."""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return "N/A"
+    return f"{value * 100:.{decimals}f}%"
+
+
+def format_number(value: float, kind: str = 'default') -> str:
+    """Format numeric values with sensible defaults by type."""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return "N/A"
+    decimals = {
+        'coefficients': 4,
+        'statistics': 2,
+        'default': 2,
+    }
+    d = decimals.get(kind, decimals['default'])
+    return f"{value:.{d}f}"
+
+
+def get_significance_stars(p_value: float) -> str:
+    """Return conventional significance stars for a p-value."""
+    if p_value < 0.01:
+        return '***'
+    if p_value < 0.05:
+        return '**'
+    if p_value < 0.10:
+        return '*'
+    return ''
 
 # Run setup when imported
 create_output_dirs()
