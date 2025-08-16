@@ -60,7 +60,7 @@ from data_loader import (
     create_data_summary_table
 )
 from models import (
-    estimate_capm, estimate_ff3, forecast_capm_return, forecast_ff3_return,
+    estimate_capm, estimate_ff3, forecast_capm_return_multiperiod, forecast_ff3_return,
     calculate_vw_beta, analyze_alpha_persistence, diagnose_estimation_quality
 )
 from sampling import sample_events_value_weighted, analyze_sample_characteristics, validate_sampling_randomness
@@ -211,13 +211,31 @@ def main():
                         validate_data=(i == 0)  # Validate only first estimation
                     )
                     
-                    # Generate forecasts
-                    forecast_row = sample['forecast_data']
-                    rf = forecast_row['RF']
-                    mkt_excess = forecast_row['MKT'] - rf
-                    
-                    forecast_alpha = forecast_capm_return(alpha, beta, mkt_excess, rf, use_alpha=True)
-                    forecast_zero = forecast_capm_return(alpha, beta, mkt_excess, rf, use_alpha=False)
+                    # Generate forecasts with proper horizon handling
+                    if horizon == 1:
+                        forecast_row = sample['forecast_data']
+                        mkt_excess = forecast_row.get('Mkt-RF', forecast_row['MKT'] - forecast_row['RF'])
+                        rf = forecast_row['RF']
+                        actual = forecast_row['RET']
+                    else:
+                        permno = sample['permno']
+                        start_date = sample['estimation_end'] + pd.Timedelta(days=1)
+                        end_date = sample['forecast_date']
+
+                        horizon_data = merged_df[(merged_df['permno'] == permno) &
+                                                 (merged_df['date'] >= start_date) &
+                                                 (merged_df['date'] <= end_date)]
+
+                        mkt_excess = horizon_data['Mkt-RF'].sum()
+                        rf = horizon_data['RF'].sum()
+                        actual = horizon_data['RET'].sum()
+
+                    forecast_alpha = forecast_capm_return_multiperiod(
+                        alpha, beta, mkt_excess, rf, horizon=horizon, use_alpha=True
+                    )
+                    forecast_zero = forecast_capm_return_multiperiod(
+                        alpha, beta, mkt_excess, rf, horizon=horizon, use_alpha=False
+                    )
                     
                 elif MODEL_CONFIG['base_model'] == 'ff3':
                     coefficients, metrics = estimate_ff3(
@@ -237,12 +255,12 @@ def main():
                         'HML': forecast_row['HML']
                     }
                     rf = forecast_row['RF']
-                    
+                    actual = forecast_row['RET']
+
                     forecast_alpha = forecast_ff3_return(coefficients, factors, rf, use_alpha=True)
                     forecast_zero = forecast_ff3_return(coefficients, factors, rf, use_alpha=False)
                 
                 # Calculate errors
-                actual = forecast_row['RET']
                 error_alpha = actual - forecast_alpha
                 error_zero = actual - forecast_zero
                 
