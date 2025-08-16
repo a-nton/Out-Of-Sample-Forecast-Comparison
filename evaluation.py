@@ -1213,11 +1213,26 @@ def check_forecast_quality(results_df: pd.DataFrame) -> Dict[str, any]:
 # === SECTION 7: MODEL COMPARISON UTILITIES ===
 
 def compare_models_performance(results_df: pd.DataFrame) -> Dict[str, float]:
-    """Compare CAPM and FF3 forecast performance without re-estimation."""
+    """Compare CAPM and FF3 forecast performance without re-estimation.
+
+    Supports DataFrames that either use explicit model-specific error columns
+    (e.g. ``error_capm_alpha``) or the generic ``error_alpha``/``error_zero``
+    pair for CAPM. Raises a helpful error if FF3 errors are missing.
+    """
+
+    # Determine which columns hold CAPM errors
+    capm_alpha_col = 'error_capm_alpha' if 'error_capm_alpha' in results_df.columns else 'error_alpha'
+    capm_zero_col = 'error_capm_zero' if 'error_capm_zero' in results_df.columns else 'error_zero'
+
+    # FF3 errors must be present to perform the comparison
+    if 'error_ff3_alpha' not in results_df.columns or 'error_ff3_zero' not in results_df.columns:
+        raise KeyError(
+            "results_df must contain 'error_ff3_alpha' and 'error_ff3_zero' columns to compare against CAPM"
+        )
 
     comparisons = {
-        'CAPM with α': calculate_rmse(results_df['error_capm_alpha']),
-        'CAPM no α': calculate_rmse(results_df['error_capm_zero']),
+        'CAPM with α': calculate_rmse(results_df[capm_alpha_col]),
+        'CAPM no α': calculate_rmse(results_df[capm_zero_col]),
         'FF3 with α': calculate_rmse(results_df['error_ff3_alpha']),
         'FF3 no α': calculate_rmse(results_df['error_ff3_zero']),
     }
@@ -1254,9 +1269,13 @@ def compare_models_performance(results_df: pd.DataFrame) -> Dict[str, float]:
     # Statistical test: does FF3 beat CAPM?
     t_stat, p_val = stats.ttest_rel(
         results_df['error_ff3_alpha'].abs(),
-        results_df['error_capm_alpha'].abs()
+        results_df[capm_alpha_col].abs()
     )
     print(f"\nFF3 vs CAPM paired t-test: t={t_stat:.3f}, p={p_val:.4f}")
-    print(f"Average R² improvement from factors: {results_df['r2_increment'].mean():.3f}")
+
+    if 'r2_increment' in results_df.columns:
+        print(f"Average R² improvement from factors: {results_df['r2_increment'].mean():.3f}")
+    else:
+        print("Average R² improvement from factors: N/A")
 
     return comparisons
