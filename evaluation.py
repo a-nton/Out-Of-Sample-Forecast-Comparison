@@ -1215,26 +1215,17 @@ def check_forecast_quality(results_df: pd.DataFrame) -> Dict[str, any]:
 def compare_models_performance(results_df: pd.DataFrame) -> Dict[str, float]:
     """Compare CAPM and FF3 forecast performance without re-estimation.
 
-    Supports DataFrames that either use explicit model-specific error columns
-    (e.g. ``error_capm_alpha``) or the generic ``error_alpha``/``error_zero``
-    pair for CAPM. If FF3 error columns are missing, the function returns a
-    CAPM-only comparison instead of raising an exception.
+    Expects CAPM errors to be stored in ``error_capm_alpha`` and
+    ``error_capm_zero``. If FF3 error columns are missing, the function
+    returns a CAPM-only comparison instead of raising an exception.
     """
 
-    # Determine which columns hold CAPM errors
-    capm_alpha_col = (
-        'error_capm_alpha' if 'error_capm_alpha' in results_df.columns
-        else 'error_alpha' if 'error_alpha' in results_df.columns
-        else None
-    )
-    capm_zero_col = (
-        'error_capm_zero' if 'error_capm_zero' in results_df.columns
-        else 'error_zero' if 'error_zero' in results_df.columns
-        else None
-    )
+    # CAPM errors are expected under fixed column names
+    capm_alpha_col = 'error_capm_alpha'
+    capm_zero_col = 'error_capm_zero'
 
-    # If even the CAPM error columns are missing, we cannot compute any comparison
-    if capm_alpha_col is None or capm_zero_col is None:
+    # If the CAPM error columns are missing, we cannot compute any comparison
+    if capm_alpha_col not in results_df.columns or capm_zero_col not in results_df.columns:
         print("\nCAPM errors not found; skipping model comparison.")
         return {}
 
