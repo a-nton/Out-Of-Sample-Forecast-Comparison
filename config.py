@@ -55,7 +55,7 @@ PRESENTATION_CONFIG = {
 
 # === FILE PATHS ===
 DATA_PATHS = {
-    'crsp_file': 'data/CRSP 1970-2024.parquet',
+    'crsp_file': 'data/crsp_sample.parquet',
     'ff_factors': 'data/F-F_Research_Data_Factors_daily.csv',
 }
 
