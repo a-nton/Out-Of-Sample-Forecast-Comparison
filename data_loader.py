@@ -11,18 +11,9 @@ import numpy as np
 import pandas as pd
 
 from config import DATA_PATHS, DATA_FILTERS, MODEL_CONFIG, PRESENTATION_CONFIG
-
-
 logger = logging.getLogger(__name__)
 
 # === SECTION 1: DATA LOADING FUNCTIONS ===
-
-def _winsorize_series(series: pd.Series, level: float) -> pd.Series:
-    """Winsorize a series at the given two-sided level."""
-    lower = series.quantile(level)
-    upper = series.quantile(1 - level)
-    return series.clip(lower=lower, upper=upper)
-
 
 def load_crsp_data(filepath: str = None) -> pd.DataFrame:
     """Load CRSP data from parquet file with validation."""
@@ -66,10 +57,36 @@ def load_crsp_data(filepath: str = None) -> pd.DataFrame:
     # RET = -66.0 to -99.0 are CRSP missing codes
     df.loc[df['RET'] <= -66.0, 'RET'] = np.nan
 
-    # Optional winsorization
-    if MODEL_CONFIG.get('winsorize_returns', False):
-        level = MODEL_CONFIG.get('winsorize_level', 0.001)
-        df['RET'] = _winsorize_series(df['RET'], level)
+    # Winsorize returns before applying filters
+    if MODEL_CONFIG.get('winsorize_returns', True):
+        level = MODEL_CONFIG.get('winsorize_level', 0.005)
+
+        # Store original returns for diagnostics
+        df['RET_original'] = df['RET'].copy()
+
+        ret_notna = df['RET'].notna()
+        if ret_notna.sum() > 0:
+            lower = df.loc[ret_notna, 'RET'].quantile(level)
+            upper = df.loc[ret_notna, 'RET'].quantile(1 - level)
+
+            n_lower = (df['RET'] < lower).sum()
+            n_upper = (df['RET'] > upper).sum()
+
+            df.loc[df['RET'] < lower, 'RET'] = lower
+            df.loc[df['RET'] > upper, 'RET'] = upper
+
+            logger.info(
+                f"Winsorized {n_lower} returns below {lower:.4f} ({level*100}%ile)"
+            )
+            logger.info(
+                f"Winsorized {n_upper} returns above {upper:.4f} ({(1 - level)*100}%ile)"
+            )
+
+            affected = n_lower + n_upper
+            total = ret_notna.sum()
+            logger.info(
+                f"Total affected: {affected}/{total} ({affected/total*100:.2f}%)"
+            )
 
     # Convert RET to percentage if needed (CRSP usually provides as decimal)
     # Check if returns are likely in decimal format (small values)
@@ -228,22 +245,11 @@ def prepare_analysis_data(crsp_df: pd.DataFrame,
     
     if apply_filters:
         initial_len = len(df)
-        
+
         # Apply additional filters based on config
-        if 'max_return' in DATA_FILTERS:
-            extreme_mask = df['RET'].abs() <= DATA_FILTERS['max_return']
-            n_extreme = (~extreme_mask).sum()
-            if n_extreme > 0:
-                logger.warning(
-                    "Removing %s observations with returns > %.0f%%",
-                    f"{n_extreme:,}",
-                    DATA_FILTERS['max_return'] * 100,
-                )
-            df = df[extreme_mask]
-        
         if 'min_market_cap' in DATA_FILTERS and DATA_FILTERS['min_market_cap'] > 0:
             df = df[df['market_cap'] >= DATA_FILTERS['min_market_cap']]
-        
+
         logger.debug(
             "Additional filters: %s → %s observations",
             f"{initial_len:,}",
@@ -479,5 +485,88 @@ def create_data_summary_table(df: pd.DataFrame) -> pd.DataFrame:
         f"${cap_stats.quantile(0.1):,.1f}",
         f"${cap_stats.quantile(0.9):,.1f}"
     ])
-    
+
     return pd.DataFrame(summary)
+
+
+def analyze_winsorization_impact(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Analyze the impact of winsorization on return distribution
+    """
+    if 'RET_original' not in df.columns:
+        print("No winsorization applied (RET_original not found)")
+        return None
+
+    analysis = pd.DataFrame({
+        'Statistic': ['Mean', 'Std Dev', 'Skewness', 'Kurtosis',
+                     'Min', '1%', '5%', '95%', '99%', 'Max',
+                     'N Changed', '% Changed'],
+        'Original': [
+            df['RET_original'].mean() * 100,
+            df['RET_original'].std() * 100,
+            df['RET_original'].skew(),
+            df['RET_original'].kurtosis(),
+            df['RET_original'].min() * 100,
+            df['RET_original'].quantile(0.01) * 100,
+            df['RET_original'].quantile(0.05) * 100,
+            df['RET_original'].quantile(0.95) * 100,
+            df['RET_original'].quantile(0.99) * 100,
+            df['RET_original'].max() * 100,
+            0,
+            0,
+        ],
+        'Winsorized': [
+            df['RET'].mean() * 100,
+            df['RET'].std() * 100,
+            df['RET'].skew(),
+            df['RET'].kurtosis(),
+            df['RET'].min() * 100,
+            df['RET'].quantile(0.01) * 100,
+            df['RET'].quantile(0.05) * 100,
+            df['RET'].quantile(0.95) * 100,
+            df['RET'].quantile(0.99) * 100,
+            df['RET'].max() * 100,
+            (df['RET'] != df['RET_original']).sum(),
+            (df['RET'] != df['RET_original']).mean() * 100,
+        ]
+    })
+
+    numeric_rows = analysis['Statistic'].isin(['Mean', 'Std Dev', 'Skewness', 'Kurtosis',
+                                               'Min', '1%', '5%', '95%', '99%', 'Max'])
+    analysis.loc[numeric_rows, 'Change'] = (
+        analysis.loc[numeric_rows, 'Winsorized'] -
+        analysis.loc[numeric_rows, 'Original']
+    )
+
+    return analysis
+
+
+def test_winsorization_levels(df: pd.DataFrame,
+                              levels: list = [0.001, 0.0025, 0.005, 0.01]) -> pd.DataFrame:
+    """
+    Test different winsorization levels to find optimal
+    """
+    results = []
+
+    for level in levels:
+        df_temp = df.copy()
+
+        lower = df_temp['RET'].quantile(level)
+        upper = df_temp['RET'].quantile(1 - level)
+
+        df_temp['RET_wins'] = df_temp['RET'].clip(lower=lower, upper=upper)
+
+        n_affected = (df_temp['RET'] != df_temp['RET_wins']).sum()
+        pct_affected = n_affected / len(df_temp) * 100
+
+        results.append({
+            'Level': f"{level*100:.2f}%",
+            'Lower Bound': f"{lower*100:.3f}%",
+            'Upper Bound': f"{upper*100:.3f}%",
+            'N Affected': n_affected,
+            '% Affected': f"{pct_affected:.2f}%",
+            'New Std Dev': f"{df_temp['RET_wins'].std()*100:.3f}%",
+            'Removed Kurtosis': f"{df_temp['RET'].kurtosis() - df_temp['RET_wins'].kurtosis():.2f}"
+        })
+
+    return pd.DataFrame(results)

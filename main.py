@@ -57,7 +57,8 @@ sys.path.append(str(BASE_DIR / 'src'))
 from config import *
 from data_loader import (
     load_crsp_data, load_ff_factors, prepare_analysis_data,
-    create_data_summary_table
+    create_data_summary_table, analyze_winsorization_impact,
+    test_winsorization_levels
 )
 from models import (
     estimate_capm, estimate_ff3, forecast_capm_return_multiperiod, forecast_ff3_return,
@@ -120,10 +121,20 @@ def main():
     
     # Merge and prepare
     merged_df = prepare_analysis_data(crsp_df, ff_df, apply_filters=True)
-    
+
     # Create data summary for paper
     data_summary = create_data_summary_table(merged_df)
     data_summary.to_csv(os.path.join(OUTPUT_CONFIG['results_dir'], 'data_summary.csv'), index=False)
+
+    # Winsorization diagnostics
+    impact = analyze_winsorization_impact(merged_df)
+    if impact is not None:
+        print("\nWinsorization Impact:")
+        print(impact)
+
+    print("\nWinsorization Level Analysis:")
+    winsorization_analysis = test_winsorization_levels(merged_df)
+    print(winsorization_analysis)
     
     # === SECTION 2: METHODOLOGY VALIDATION (if available) ===
     if VALIDATION_AVAILABLE and ANALYSIS_CONFIG.get('run_validation', True):
