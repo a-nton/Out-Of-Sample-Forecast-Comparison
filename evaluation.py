@@ -997,7 +997,7 @@ def create_forecast_comparison_table(results_by_horizon: Dict[int, pd.DataFrame]
         # Create LaTeX table
         table = "\\begin{table}[ht]\n"
         table += "\\centering\n"
-        table += f"\\caption{{{PRESENTATION_CONFIG['table_caption']}}}\n"
+        table += f"\\caption{{{PRESENTATION_CONFIG['forecast_comparison_table']['caption']}}}\n"
         table += "\\label{tab:forecast_comparison}\n"
         table += "\\begin{tabular}{lcccccc}\n"
         table += "\\hline\\hline\n"
@@ -1034,7 +1034,7 @@ def create_forecast_comparison_table(results_by_horizon: Dict[int, pd.DataFrame]
         table += "\\end{tabular}\n"
         table += "\\begin{tablenotes}\n"
         table += "\\small\n"
-        table += f"\\item {PRESENTATION_CONFIG['table_notes']}\n"
+        table += f"\\item {PRESENTATION_CONFIG['forecast_comparison_table']['notes']}\n"
         table += "\\end{tablenotes}\n"
         table += "\\end{table}\n"
         
@@ -1065,7 +1065,7 @@ def create_forecast_comparison_table(results_by_horizon: Dict[int, pd.DataFrame]
                 table += "*"
             table += " |\n"
         
-        table += "\n" + PRESENTATION_CONFIG['table_notes']
+        table += "\n" + PRESENTATION_CONFIG['forecast_comparison_table']['notes']
 
     return table
 
